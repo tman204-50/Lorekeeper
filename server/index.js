@@ -85,6 +85,10 @@ process.env.OPENCODE_MEMORY_PRO_MIN_CAPTURE_CHARS ??= "40";
 process.env.OPENCODE_MEMORY_PRO_CAPTURE_MODE ??= "llm";
 process.env.OPENCODE_MEMORY_PRO_CAPTURE_LLM_PROVIDER ??= "openrouter";
 process.env.OPENCODE_MEMORY_PRO_CAPTURE_LLM_MODEL ??= "minimax/minimax-m3";
+// Recency boost: soften the 72h default half-life to 7 days so fresh captures
+// don't bury the imported history (old memories decay toward the 0.5 floor
+// either way, but days-old memories keep a fairer share of the boost).
+process.env.OPENCODE_MEMORY_PRO_RECENCY_HALF_LIFE_HOURS ??= "168";
 
 const configPath = process.env.LOREKEEPER_CONFIG;
 if (configPath) {
