@@ -89,6 +89,10 @@ process.env.OPENCODE_MEMORY_PRO_CAPTURE_LLM_MODEL ??= "minimax/minimax-m3";
 // don't bury the imported history (old memories decay toward the 0.5 floor
 // either way, but days-old memories keep a fairer share of the boost).
 process.env.OPENCODE_MEMORY_PRO_RECENCY_HALF_LIFE_HOURS ??= "168";
+// Importance weight: 0.4 -> 1.0 so high-importance memories (profile 0.9,
+// preferences 0.8) outrank the churn despite the recency floor. A profile
+// memory now gets ~1.9x from importance vs 1.36x before.
+process.env.OPENCODE_MEMORY_PRO_IMPORTANCE_WEIGHT ??= "1.0";
 
 const configPath = process.env.LOREKEEPER_CONFIG;
 if (configPath) {
