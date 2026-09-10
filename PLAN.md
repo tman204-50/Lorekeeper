@@ -85,8 +85,11 @@ Auth: loopback + bearer token (in `lorekeeper.json`, like mem0's pattern).
    `hermes config set memory.provider lorekeeper`. Tools: lorekeeper_search,
    lorekeeper_remember, lorekeeper_delete, lorekeeper_stats. Verified
    end-to-end through the Hermes plugin loader.
-3. ⏳ **Full tool surface** — port the remaining tools (feedback, lifecycle,
-   scoping, episodic) as RPC calls.
+3. ✅ **Full tool surface** — the fork's 34 tools registered via a generic
+   `/tool` dispatcher (imports createMemoryTools/createFeedbackTools/
+   createEpisodicTools directly; zod schemas → OpenAI JSON via
+   zod-to-json-schema; `memory_` prefix stripped). Provider fetches schemas
+   dynamically and dispatches generically — no per-tool RPC.
 4. ✅ **Capture hooks** — service `/capture` endpoint (heuristics extraction →
    embed → dedup → store → graph → event → prune); provider `sync_turn`
    buffers each turn and flushes (per-turn + on_session_end / on_pre_compress /

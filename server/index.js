@@ -25,6 +25,10 @@ import { initLogger, configureLogger, log } from "../vendor/dist/logger.js";
 import { deriveProjectScope } from "../vendor/dist/scope.js";
 import { extractCaptureCandidate } from "../vendor/dist/extract.js";
 import { generateId } from "../vendor/dist/utils.js";
+import { createMemoryTools } from "../vendor/dist/tools/memory.js";
+import { createFeedbackTools } from "../vendor/dist/tools/feedback.js";
+import { createEpisodicTools } from "../vendor/dist/tools/episodic.js";
+import { zodToJsonSchema } from "zod-to-json-schema";
 
 const SCHEMA_VERSION = 1;
 
@@ -67,6 +71,12 @@ const state = {
   graph: null,
   initialized: false,
   initPromise: null,
+  // Fields the fork's tools read/write (vendor/dist/tools/*.js):
+  consolidationInProgress: new Map(),
+  lastRecall: null,
+  client: null, // no OpenCode SDK — LLM paths degrade to extractive fallbacks
+  defaultScope: "global",
+  ensureInitialized: async () => { await ensureInit(); },
 };
 
 async function ensureInit() {
@@ -206,6 +216,68 @@ async function recordCaptureEvent(input) {
   } catch (error) {
     log("warn", `capture event write failed: ${error}`);
   }
+}
+
+// --- fork tool registry ------------------------------------------------------
+// The fork's tools (vendor/dist/tools/*.js) are written against `state` and
+// expose {description, args: {name: zodSchema}, execute}. We register them all
+// under the lorekeeper_ prefix and dispatch via a generic /tool endpoint —
+// no per-tool RPC needed.
+let toolRegistry = null;
+
+function getToolRegistry() {
+  if (toolRegistry) return toolRegistry;
+  const tools = {
+    ...createMemoryTools(state),
+    ...createFeedbackTools(state),
+    ...createEpisodicTools(state),
+  };
+  toolRegistry = new Map();
+  for (const [name, def] of Object.entries(tools)) {
+    // Strip the fork's "memory_" prefix: lorekeeper_memory_search ->
+    // lorekeeper_search (the fork's memory_* names are the full surface; our
+    // earlier custom handlers get dropped in favor of these).
+    const short = name.startsWith("memory_") ? name.slice("memory_".length) : name;
+    toolRegistry.set(`lorekeeper_${short}`, { name, def });
+  }
+  return toolRegistry;
+}
+
+function zodToOpenAISchema(zodSchema) {
+  // zod-to-json-schema handles optional/default/enum/array shapes; the
+  // OpenAI function-calling contract wants a plain JSON schema object.
+  const jsonSchema = zodToJsonSchema(zodSchema, { target: "jsonSchema7" });
+  // Drop $schema/$defs noise; keep the core type/properties.
+  delete jsonSchema.$schema;
+  return jsonSchema;
+}
+
+function toolSchemas() {
+  const registry = getToolRegistry();
+  const out = [];
+  for (const [lorekeeperName, { def }] of registry) {
+    const properties = {};
+    const required = [];
+    for (const [argName, zodSchema] of Object.entries(def.args)) {
+      properties[argName] = zodToOpenAISchema(zodSchema);
+      if (!zodSchema.isOptional()) required.push(argName);
+    }
+    out.push({
+      name: lorekeeperName,
+      description: def.description,
+      parameters: { type: "object", properties, required },
+    });
+  }
+  return out;
+}
+
+async function runTool(name, args) {
+  const registry = getToolRegistry();
+  const entry = registry.get(name);
+  if (!entry) throw new Error(`unknown tool: ${name}`);
+  await ensureInit();
+  const context = { directory: process.cwd(), worktree: process.cwd() };
+  return await entry.def.execute(args ?? {}, context);
 }
 
 // --- route handlers ------------------------------------------------------------
@@ -358,6 +430,16 @@ const handlers = {
       importance: result.candidate.importance,
       text: result.candidate.text,
     };
+  },
+  async tools() {
+    return { tools: toolSchemas() };
+  },
+  async tool(args) {
+    const { name, toolArgs } = args;
+    if (!name) throw new Error("name is required");
+    const result = await runTool(name, toolArgs ?? {});
+    // Normalize: tools return strings (formatted text) or objects/arrays.
+    return typeof result === "string" ? { result } : { result };
   },
   async list(args) {
     await ensureInit();

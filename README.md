@@ -48,6 +48,8 @@ Config: `~/.hermes/lorekeeper.json` via `hermes memory setup` (host field).
 | POST | `/search` | `{query, limit?, scope?}` → `{results:[{id,text,score,...}], count}` |
 | POST | `/remember` | `{content, category?, importance?, scope?}` → `{id}` |
 | POST | `/capture` | `{sessionID?, text, scope?}` → `{stored, id?, category?, importance?, skipReason?}` |
+| POST | `/tools` | `{}` → `{tools:[{name, description, parameters}]}` (34 fork tools) |
+| POST | `/tool` | `{name, toolArgs?}` → `{result}` (generic dispatch) |
 | POST | `/delete` | `{id, force?}` → `{ok, id}` |
 | POST | `/stats` | `{}` → `{counts, index}` |
 | POST | `/list` | `{scope?, limit?}` → `{results}` |
@@ -73,7 +75,7 @@ Auth: `Authorization: Bearer <token>` (token in `~/.hermes/lorekeeper/token`).
 
 - [x] Phase 1: Node service (health/init/remember/search/delete/stats/list/export/import)
 - [x] Phase 2: Hermes provider wired (lorekeeper_search/remember/delete/stats)
-- [ ] Phase 3: full tool surface (feedback, lifecycle, scoping, episodic)
+- [x] Phase 3: full tool surface (34 fork tools via generic /tool dispatcher)
 - [x] Phase 4: auto-capture (service /capture + provider sync_turn/session hooks)
 - [ ] Phase 5: import old data from `/root/.openclaw/memory/lancedb`
 

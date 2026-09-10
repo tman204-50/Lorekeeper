@@ -18,6 +18,7 @@
     "@lancedb/lancedb": "^0.38.0",
     "@opencode-ai/plugin": "^1.4.10",
     "fuse.js": "^7.5.0",
-    "zod": "^4.1.8"
+    "zod": "^4.1.8",
+    "zod-to-json-schema": "^3.25.2"
   }
 }

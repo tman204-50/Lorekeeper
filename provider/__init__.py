@@ -56,38 +56,6 @@ def _read_token(hermes_home: Path) -> str:
     return ""
 
 
-def _schema(name: str, description: str, properties: dict, required: list) -> dict:
-    props = {k: {"type": t, "description": d} for k, (t, d) in properties.items()}
-    return {"name": name, "description": description, "parameters": {"type": "object", "properties": props, "required": required}}
-
-
-TOOL_SCHEMAS = [
-    _schema(
-        "lorekeeper_search",
-        "Search long-term memory (LanceDB vector + BM25 hybrid). Use before answering anything that may depend on what you know about the user — preferences, facts, history, projects, past decisions. For multi-part questions, search several times with different wording.",
-        {"query": ("string", "What to search for."), "limit": ("integer", "Max results (default: 5, max: 20).")},
-        ["query"],
-    ),
-    _schema(
-        "lorekeeper_remember",
-        "Store a durable fact about the user, verbatim. Call this the moment the user states a lasting preference, correction, decision, or personal detail worth recalling on future turns. Skip transient chit-chat.",
-        {"content": ("string", "The fact to store."), "category": ("string", "Optional category (e.g. preference, fact, decision)."), "importance": ("number", "Importance 0-1 (default 0.5).")},
-        ["content"],
-    ),
-    _schema(
-        "lorekeeper_delete",
-        "Delete a memory by its ID (take the ID from a lorekeeper_search result). Use when a stored fact is obsolete or the user asks you to forget it.",
-        {"memory_id": ("string", "Memory ID to delete."), "force": ("boolean", "Hard-delete instead of soft-delete (default false).")},
-        ["memory_id"],
-    ),
-    _schema(
-        "lorekeeper_stats",
-        "Show Lorekeeper memory store status: total memories, per-scope counts, index health, embedder.",
-        {},
-        [],
-    ),
-]
-
 _PROMPT_BODY = (
     "You have persistent long-term memory via Lorekeeper (LanceDB vector store). "
     "Call lorekeeper_search before answering anything that could depend on prior context — "
@@ -290,48 +258,31 @@ class LorekeeperMemoryProvider(MemoryProvider):
     # -- tools ---------------------------------------------------------------
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        return list(TOOL_SCHEMAS)
-
-    def _tool_search(self, args: dict) -> str:
-        limit = max(1, min(int(args.get("limit", 5)), 20))
-        results = self._client.search(args["query"], limit=limit)
-        items = results.get("results", [])
-        if not items:
-            return json.dumps({"result": "No relevant memories found."})
-        return json.dumps({"results": items, "count": len(items)})
-
-    def _tool_remember(self, args: dict) -> str:
-        result = self._client.remember(args["content"], category=args.get("category"), importance=args.get("importance"))
-        return json.dumps({"result": "Memory stored.", "id": result.get("id")})
-
-    def _tool_delete(self, args: dict) -> str:
-        result = self._client.delete(args["memory_id"], force=bool(args.get("force", False)))
-        return json.dumps({"result": "Memory deleted.", "id": args["memory_id"]})
-
-    def _tool_stats(self, args: dict) -> str:
-        return json.dumps(self._client.stats())
-
-    _TOOL_HANDLERS = {
-        "lorekeeper_search": (("query",), "Search failed", _tool_search),
-        "lorekeeper_remember": (("content",), "Failed to store", _tool_remember),
-        "lorekeeper_delete": (("memory_id",), "Delete failed", _tool_delete),
-        "lorekeeper_stats": ((), "Stats failed", _tool_stats),
-    }
+        """Fetch the full tool surface from the service (34 fork tools)."""
+        if self._client is None:
+            return []
+        try:
+            resp = self._client.tools()
+            return resp.get("tools", [])
+        except Exception as e:
+            logger.debug("Lorekeeper tool schema fetch failed: %s", e)
+            return []
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
+        """Generic dispatch: every lorekeeper_* tool runs on the service."""
         if self._client is None:
             return json.dumps({"error": "Lorekeeper service not initialized. Is the service running? (see Lorekeeper README)"})
-        if tool_name not in self._TOOL_HANDLERS:
-            return tool_error(f"Unknown tool: {tool_name}")
-        required, label, body = self._TOOL_HANDLERS[tool_name]
-        if missing := next((k for k in required if not args.get(k, "")), None):
-            return tool_error(f"Missing required parameter: {missing}")
         try:
-            return body(self, args)
+            result = self._client.tool(tool_name, args)
+            # The service returns {result: <string|object|array>}.
+            payload = result.get("result")
+            if isinstance(payload, str):
+                return payload
+            return json.dumps(payload)
         except LorekeeperError as e:
-            return tool_error(f"{label}: {e}")
+            return tool_error(f"Lorekeeper tool failed: {e}")
         except Exception as e:
-            return tool_error(f"{label}: {e}")
+            return tool_error(f"Lorekeeper tool failed: {e}")
 
 
 def register(ctx) -> None:

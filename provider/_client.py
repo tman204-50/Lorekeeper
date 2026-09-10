@@ -70,5 +70,13 @@ class LorekeeperClient:
         """Run heuristics auto-capture on buffered turn text."""
         return self._request("POST", "/capture", payload)
 
+    def tools(self) -> dict:
+        """List all registered tool schemas from the service."""
+        return self._request("POST", "/tools", {})
+
+    def tool(self, name: str, tool_args: dict) -> dict:
+        """Dispatch a single fork tool call to the service."""
+        return self._request("POST", "/tool", {"name": name, "toolArgs": tool_args})
+
     def close(self) -> None:
         pass  # urllib has no persistent connection to close
