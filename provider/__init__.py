@@ -257,8 +257,32 @@ class LorekeeperMemoryProvider(MemoryProvider):
 
     # -- tools ---------------------------------------------------------------
 
+    def _ensure_client(self) -> None:
+        """Build the client from config/token without session kwargs.
+
+        MemoryManager.add_provider() calls get_tool_schemas() BEFORE
+        initialize() has run (initialize is what normally builds the
+        client), so get_tool_schemas() must be able to build it lazily —
+        otherwise the provider registers 0 tools, the dispatch routing
+        table stays empty, and every lorekeeper_* call falls through to
+        the registry as "Unknown tool". initialize() re-reads the same
+        config and re-creates the client, so this is safe to call early.
+        """
+        if self._client is not None:
+            return
+        from hermes_constants import get_hermes_home
+
+        home = get_hermes_home()
+        cfg = _read_config(home)
+        host = (cfg.get("host") or os.environ.get("LOREKEEPER_HOST") or _DEFAULT_HOST).rstrip("/")
+        token = (cfg.get("token") or _read_token(home)) or ""
+        if host and token:
+            self._client = LorekeeperClient(host, token)
+
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         """Fetch the full tool surface from the service (34 fork tools)."""
+        if self._client is None:
+            self._ensure_client()
         if self._client is None:
             return []
         try:
