@@ -23,6 +23,10 @@ import { MemoryStore } from "../vendor/dist/store.js";
 import { createGraphStore } from "../vendor/dist/graph.js";
 import { initLogger, configureLogger, log } from "../vendor/dist/logger.js";
 import { deriveProjectScope } from "../vendor/dist/scope.js";
+import { extractCaptureCandidate } from "../vendor/dist/extract.js";
+import { generateId } from "../vendor/dist/utils.js";
+
+const SCHEMA_VERSION = 1;
 
 const PORT = Number(process.env.LOREKEEPER_PORT ?? 18777);
 const HOME = homedir();
@@ -45,6 +49,10 @@ if (!authToken) {
 process.env.OPENCODE_MEMORY_PRO_DB_PATH ??= DB_PATH;
 process.env.OPENCODE_MEMORY_PRO_GRAPH_DB_PATH ??= GRAPH_PATH;
 process.env.OPENCODE_MEMORY_PRO_SCOPING ??= "global"; // single-user
+// Per-turn capture (vs the fork's whole-session buffer): a single turn is
+// often 40-80 chars, so the fork's 80-char floor would skip most substantive
+// turns. Lower it; the signal-regex gate still filters noise.
+process.env.OPENCODE_MEMORY_PRO_MIN_CAPTURE_CHARS ??= "40";
 
 const configPath = process.env.LOREKEEPER_CONFIG;
 if (configPath) {
@@ -116,6 +124,88 @@ function readBody(req) {
 
 function unauthorized(res) {
   sendJson(res, 401, { error: "unauthorized" });
+}
+
+// --- capture pipeline helpers (mirror vendor/dist/index.js) ---------------
+async function storeCapturedMemory(opts) {
+  let vector = [];
+  try {
+    vector = await state.embedder.embed(opts.text);
+  } catch (error) {
+    log("warn", `embedding unavailable during auto-capture: ${error}`);
+    return { id: null, skipReason: "embedding-unavailable" };
+  }
+  if (vector.length === 0) {
+    log("warn", "auto-capture skipped because embedding vector is empty");
+    return { id: null, skipReason: "empty-embedding" };
+  }
+  let isPotentialDuplicate = false;
+  let duplicateOf = null;
+  if (state.config.dedup.enabled) {
+    const similar = await state.store.findSimilarVectors(vector, opts.scope, 1);
+    if (similar.length > 0 && similar[0].score >= state.config.dedup.writeThreshold) {
+      isPotentialDuplicate = true;
+      duplicateOf = similar[0].id;
+    }
+  }
+  const memoryId = generateId();
+  const now = Date.now();
+  const graphEntities = state.config.graph?.enabled && state.graph?.enabled
+    ? state.graph.extract(opts.text)
+    : [];
+  await state.store.put({
+    id: memoryId,
+    text: opts.text,
+    vector,
+    category: opts.category,
+    scope: opts.scope,
+    importance: opts.importance,
+    timestamp: now,
+    lastRecalled: 0,
+    recallCount: 0,
+    projectCount: 0,
+    schemaVersion: SCHEMA_VERSION,
+    embeddingModel: state.config.embedding.model,
+    vectorDim: vector.length,
+    metadataJson: JSON.stringify({
+      source: opts.source ?? "auto-capture",
+      sessionID: opts.sessionID,
+      isPotentialDuplicate,
+      duplicateOf,
+      graphEntities: graphEntities.map((e) => e.name),
+    }),
+    citationSource: opts.source ?? "auto-capture",
+    citationTimestamp: now,
+    citationStatus: "pending",
+  });
+  if (state.config.graph?.enabled && state.graph?.enabled) {
+    try {
+      state.graph.indexMemory(memoryId, opts.text, now);
+    } catch (error) {
+      log("warn", `graph indexMemory failed: ${error}`);
+    }
+  }
+  return { id: memoryId, skipReason: null };
+}
+
+async function recordCaptureEvent(input) {
+  if (!state.initialized) return;
+  try {
+    await state.store.putEvent({
+      id: generateId(),
+      type: "capture",
+      scope: input.scope,
+      sessionID: input.sessionID ?? "",
+      timestamp: Date.now(),
+      memoryId: input.memoryId ?? "",
+      text: input.text?.slice(0, 4000) ?? "",
+      outcome: input.outcome ?? "",
+      skipReason: input.skipReason ?? "",
+      metadataJson: "{}",
+    });
+  } catch (error) {
+    log("warn", `capture event write failed: ${error}`);
+  }
 }
 
 // --- route handlers ------------------------------------------------------------
@@ -216,6 +306,57 @@ const handlers = {
       counts: { total: records.length, byScope },
       index: state.store.getIndexHealth ? await state.store.getIndexHealth() : null,
       initialized: state.initialized,
+    };
+  },
+  async capture(args) {
+    await ensureInit();
+    const { sessionID, text, scope } = args;
+    if (!text || !text.trim()) return { stored: false, skipReason: "empty-text" };
+    const activeScope = scope ?? "global";
+    const combined = text.trim();
+    const result = extractCaptureCandidate(combined, state.config.minCaptureChars);
+    if (!result.candidate) {
+      await recordCaptureEvent({
+        sessionID: sessionID ?? "",
+        scope: activeScope,
+        outcome: "skipped",
+        skipReason: result.skipReason,
+        text: combined,
+      });
+      return { stored: false, skipReason: result.skipReason };
+    }
+    const stored = await storeCapturedMemory({
+      sessionID: sessionID ?? "",
+      scope: activeScope,
+      text: result.candidate.text,
+      category: result.candidate.category,
+      importance: result.candidate.importance,
+      source: "auto-capture",
+    });
+    if (!stored.id) {
+      await recordCaptureEvent({
+        sessionID: sessionID ?? "",
+        scope: activeScope,
+        outcome: "skipped",
+        skipReason: stored.skipReason,
+        text: combined,
+      });
+      return { stored: false, skipReason: stored.skipReason };
+    }
+    await recordCaptureEvent({
+      sessionID: sessionID ?? "",
+      scope: activeScope,
+      outcome: "stored",
+      memoryId: stored.id,
+      text: result.candidate.text,
+    });
+    await state.store.pruneScope(activeScope, state.config.maxEntriesPerScope);
+    return {
+      stored: true,
+      id: stored.id,
+      category: result.candidate.category,
+      importance: result.candidate.importance,
+      text: result.candidate.text,
     };
   },
   async list(args) {

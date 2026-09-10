@@ -87,8 +87,10 @@ Auth: loopback + bearer token (in `lorekeeper.json`, like mem0's pattern).
    end-to-end through the Hermes plugin loader.
 3. ⏳ **Full tool surface** — port the remaining tools (feedback, lifecycle,
    scoping, episodic) as RPC calls.
-4. ⏳ **Capture hooks** — map OpenCode `session.idle`/`session.deleted` to
-   Hermes `sync_turn`/session-end hooks so auto-capture works.
+4. ✅ **Capture hooks** — service `/capture` endpoint (heuristics extraction →
+   embed → dedup → store → graph → event → prune); provider `sync_turn`
+   buffers each turn and flushes (per-turn + on_session_end / on_pre_compress /
+   on_session_switch). minCaptureChars lowered to 40 for per-turn granularity.
 5. ⏳ **Import old data** — `/root/.openclaw/memory/lancedb` → Lorekeeper
    (export from old store, import via /import).
 

@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_HOST = "http://127.0.0.1:18777"
 _PREFETCH_WAIT_SECS = 3
+# Capture buffer bounds (mirror the fork's CAPTURE_BUFFER_BOUNDS): keep the
+# newest tail, cap total chars per session so a failing service can't grow
+# memory without bound.
+_CAPTURE_MAX_CHARS = 60000
 
 
 def _read_config(hermes_home: Path) -> dict:
@@ -103,6 +107,11 @@ class LorekeeperMemoryProvider(MemoryProvider):
         self._prefetch_done = False
         self._prefetch_thread = None
         self._prefetch_lock = threading.Lock()
+        # Capture: per-session text buffers + in-flight guards (thread-safe).
+        self._capture_buffers: Dict[str, str] = {}
+        self._capture_flushing: set = set()
+        self._capture_lock = threading.Lock()
+        self._current_session = ""
 
     @property
     def name(self) -> str:
@@ -140,6 +149,7 @@ class LorekeeperMemoryProvider(MemoryProvider):
         self._host = (cfg.get("host") or os.environ.get("LOREKEEPER_HOST") or _DEFAULT_HOST).rstrip("/")
         self._token = (cfg.get("token") or _read_token(home)) or ""
         self._channel = kwargs.get("platform") or "cli"
+        self._current_session = session_id or ""
         if self._host and self._token:
             self._client = LorekeeperClient(self._host, self._token)
             # Best-effort health ping; failures surface via tools, not startup.
@@ -204,8 +214,78 @@ class LorekeeperMemoryProvider(MemoryProvider):
         return ""
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "", messages: Optional[List[Dict[str, Any]]] = None) -> None:
-        # Auto-capture endpoint not built yet (Phase 4 in PLAN.md); no-op for now.
-        pass
+        """Buffer the completed turn and flush to /capture (non-blocking).
+
+        Mirrors the fork's capture-on-idle: each turn's text is appended to a
+        per-session buffer; once it crosses _CAPTURE_FLUSH_CHARS (or the
+        session ends / compresses), the buffer is sent to the service which
+        runs heuristics extraction and stores what's memory-worthy.
+        """
+        if self._client is None:
+            return
+        text = f"{user_content or ''}\n{assistant_content or ''}".strip()
+        if not text:
+            return
+        sid = session_id or "default"
+        with self._capture_lock:
+            prev = self._capture_buffers.get(sid, "")
+            combined = f"{prev}\n{text}" if prev else text
+            # Keep the newest tail (mirror CAPTURE_TAIL_KEEP).
+            if len(combined) > _CAPTURE_MAX_CHARS:
+                combined = combined[-_CAPTURE_MAX_CHARS:]
+            self._capture_buffers[sid] = combined
+        # Flush every turn (mirrors the fork's capture-on-session-idle). The
+        # service's minCaptureChars gate filters noise; dedup blocks repeats.
+        self._flush_capture(sid, synchronous=False)
+
+    def _flush_capture(self, session_id: str, *, synchronous: bool) -> None:
+        """Send the session's buffered text to /capture. On failure the buffer
+        is retained for the next flush (mirror CAPTURE_BUFFER_AFTER_WRITES)."""
+        with self._capture_lock:
+            if session_id in self._capture_flushing:
+                return
+            text = self._capture_buffers.get(session_id, "")
+            if not text:
+                return
+            self._capture_buffers.pop(session_id, None)
+            self._capture_flushing.add(session_id)
+
+        def _run():
+            try:
+                self._client.capture({"sessionID": session_id, "text": text})
+            except Exception as e:
+                logger.debug("Lorekeeper capture flush failed: %s", e)
+                # Retain for next flush.
+                with self._capture_lock:
+                    prev = self._capture_buffers.get(session_id, "")
+                    self._capture_buffers[session_id] = f"{prev}\n{text}" if prev else text
+            finally:
+                with self._capture_lock:
+                    self._capture_flushing.discard(session_id)
+
+        if synchronous:
+            _run()
+        else:
+            threading.Thread(target=_run, daemon=True, name="lorekeeper-capture").start()
+
+    def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
+        """Flush any buffered capture at a real session boundary."""
+        self._flush_capture(self._current_session, synchronous=False)
+
+    def on_session_switch(
+        self, new_session_id: str, *, parent_session_id: str = "", reset: bool = False, rewound: bool = False, **kwargs,
+    ) -> None:
+        """Rebind capture buffers on session switch; flush on a genuinely new
+        conversation so nothing buffered is lost."""
+        if reset and self._current_session and self._current_session != new_session_id:
+            self._flush_capture(self._current_session, synchronous=False)
+        self._current_session = new_session_id
+
+    def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
+        """Flush before compression so the compressed-away content is captured."""
+        if self._current_session:
+            self._flush_capture(self._current_session, synchronous=False)
+        return ""
 
     # -- tools ---------------------------------------------------------------
 

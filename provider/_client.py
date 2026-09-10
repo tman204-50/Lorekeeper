@@ -66,5 +66,9 @@ class LorekeeperClient:
     def stats(self) -> dict:
         return self._request("POST", "/stats", {})
 
+    def capture(self, payload: dict) -> dict:
+        """Run heuristics auto-capture on buffered turn text."""
+        return self._request("POST", "/capture", payload)
+
     def close(self) -> None:
         pass  # urllib has no persistent connection to close
