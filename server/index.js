@@ -326,7 +326,7 @@ async function runTool(name, args) {
   const entry = registry.get(name);
   if (!entry) throw new Error(`unknown tool: ${name}`);
   await ensureInit();
-  const context = { directory: process.cwd(), worktree: process.cwd() };
+  const context = { directory: process.cwd(), worktree: process.cwd(), sessionID: args.sessionID ?? `service-${Date.now()}` };
   return await entry.def.execute(args ?? {}, context);
 }
 
