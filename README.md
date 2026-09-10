@@ -64,6 +64,9 @@ Auth: `Authorization: Bearer <token>` (token in `~/.hermes/lorekeeper/token`).
   `LOREKEEPER_GRAPH_PATH`, `LOREKEEPER_CONFIG`
 - `OPENCODE_MEMORY_PRO_*` passthrough knobs (embedder, retrieval, graph, ...) —
   the vendor config resolver reads these.
+- `OPENROUTER_API_KEY` — loaded from `$HERMES_HOME/.env` automatically; enables
+  LLM capture/digests via the shim (`server/llm_shim.js`).
+- `OPENCODE_MEMORY_PRO_CAPTURE_LLM_MODEL` — default `minimax/minimax-m3`.
 
 ## Data locations
 
@@ -77,6 +80,7 @@ Auth: `Authorization: Bearer <token>` (token in `~/.hermes/lorekeeper/token`).
 - [x] Phase 2: Hermes provider wired (lorekeeper_search/remember/delete/stats)
 - [x] Phase 3: full tool surface (34 fork tools via generic /tool dispatcher)
 - [x] Phase 4: auto-capture (service /capture + provider sync_turn/session hooks)
+- [x] Phase 4b: LLM capture/digests via OpenRouter shim (minimax/minimax-m3)
 - [ ] Phase 5: import old data from `/root/.openclaw/memory/lancedb`
 
 See `PLAN.md` for details.

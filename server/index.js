@@ -13,7 +13,7 @@
 //   OPENCODE_MEMORY_PRO_* (passthrough knobs the vendor config resolver reads)
 
 import { createServer } from "node:http";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -24,11 +24,13 @@ import { createGraphStore } from "../vendor/dist/graph.js";
 import { initLogger, configureLogger, log } from "../vendor/dist/logger.js";
 import { deriveProjectScope } from "../vendor/dist/scope.js";
 import { extractCaptureCandidate } from "../vendor/dist/extract.js";
+import { requestLLMCapture } from "../vendor/dist/llm.js";
 import { generateId } from "../vendor/dist/utils.js";
 import { createMemoryTools } from "../vendor/dist/tools/memory.js";
 import { createFeedbackTools } from "../vendor/dist/tools/feedback.js";
 import { createEpisodicTools } from "../vendor/dist/tools/episodic.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { LLMSessionClient } from "./llm_shim.js";
 
 const SCHEMA_VERSION = 1;
 
@@ -37,6 +39,27 @@ const HOME = homedir();
 const DB_PATH = process.env.LOREKEEPER_DB_PATH ?? join(HOME, ".hermes", "lorekeeper", "lancedb");
 const GRAPH_PATH = process.env.LOREKEEPER_GRAPH_PATH ?? join(HOME, ".hermes", "lorekeeper", "graph.db");
 const TOKEN = process.env.LOREKEEPER_TOKEN ?? "";
+
+// Load OPENROUTER_API_KEY from $HERMES_HOME/.env if not already set (the
+// service runs as its own process; Hermes' .env isn't auto-exported).
+function loadEnvFile(path) {
+  try {
+    const lines = readFileSync(path, "utf8").split("\n");
+    for (const line of lines) {
+      const m = line.match(/^\s*export\s+([A-Z0-9_]+)=(.*)$/) || line.match(/^\s*([A-Z0-9_]+)=(.*)$/);
+      if (m && !process.env[m[1]]) {
+        let val = m[2].trim();
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        process.env[m[1]] = val;
+      }
+    }
+  } catch (e) {
+    // No .env — fine, LLM features just stay off.
+  }
+}
+loadEnvFile(join(HOME, ".hermes", ".env"));
 
 // --- token handling ---------------------------------------------------------
 // If no token is set, generate one and write it to the data dir so the Hermes
@@ -57,6 +80,11 @@ process.env.OPENCODE_MEMORY_PRO_SCOPING ??= "global"; // single-user
 // often 40-80 chars, so the fork's 80-char floor would skip most substantive
 // turns. Lower it; the signal-regex gate still filters noise.
 process.env.OPENCODE_MEMORY_PRO_MIN_CAPTURE_CHARS ??= "40";
+// LLM capture/digests via the shim (OpenRouter + minimax/minimax-m3).
+// OPENROUTER_API_KEY is read from the environment (Hermes .env or export).
+process.env.OPENCODE_MEMORY_PRO_CAPTURE_MODE ??= "llm";
+process.env.OPENCODE_MEMORY_PRO_CAPTURE_LLM_PROVIDER ??= "openrouter";
+process.env.OPENCODE_MEMORY_PRO_CAPTURE_LLM_MODEL ??= "minimax/minimax-m3";
 
 const configPath = process.env.LOREKEEPER_CONFIG;
 if (configPath) {
@@ -74,7 +102,9 @@ const state = {
   // Fields the fork's tools read/write (vendor/dist/tools/*.js):
   consolidationInProgress: new Map(),
   lastRecall: null,
-  client: null, // no OpenCode SDK — LLM paths degrade to extractive fallbacks
+  // LLM shim: implements the SDK client surface (session.create/prompt/delete)
+  // over OpenRouter so the fork's LLM capture/digest paths run unchanged.
+  client: null,
   defaultScope: "global",
   ensureInitialized: async () => { await ensureInit(); },
 };
@@ -99,6 +129,18 @@ async function ensureInit() {
       await state.store.init(dim);
       if (state.store.indexState?.dimensionMismatch) {
         log("warn", "embedding dimension mismatch detected; repair needed");
+      }
+      // LLM shim: OpenRouter-compatible client so capture.mode="llm" and
+      // LLM digests work. Reads OPENROUTER_API_KEY from the environment.
+      const apiKey = process.env.OPENROUTER_API_KEY;
+      if (apiKey) {
+        state.client = new LLMSessionClient({
+          apiKey,
+          model: resolved.capture?.llm?.model ?? "minimax/minimax-m3",
+        });
+        log("info", `LLM shim enabled: ${resolved.capture?.llm?.provider}/${resolved.capture?.llm?.model} (capture.mode=${resolved.capture?.mode})`);
+      } else {
+        log("warn", "OPENROUTER_API_KEY not set — LLM capture/digests disabled (heuristics only)");
       }
       state.initialized = true;
       log("info", `Lorekeeper service ready. db=${resolved.dbPath} embedder=${resolved.embedding.provider}/${resolved.embedding.model}`);
@@ -386,6 +428,75 @@ const handlers = {
     if (!text || !text.trim()) return { stored: false, skipReason: "empty-text" };
     const activeScope = scope ?? "global";
     const combined = text.trim();
+
+    // LLM_CAPTURE: when capture.mode="llm" and the shim is available, run
+    // structured extraction first; fall back to heuristics on any failure
+    // (mirror vendor/dist/index.js _flushAutoCaptureGuarded).
+    let candidates = null;
+    if (state.config.capture?.mode === "llm" && state.client) {
+      try {
+        candidates = await requestLLMCapture(state.client, state.config.capture.llm, combined, sessionID ?? "");
+      } catch (error) {
+        log("warn", `[capture] llm extraction failed: ${error}`);
+        candidates = null;
+      }
+      if (candidates && candidates.length > 0) {
+        let storedCount = 0;
+        let firstId = null;
+        for (const cand of candidates) {
+          const result = await storeCapturedMemory({
+            sessionID: sessionID ?? "",
+            scope: activeScope,
+            text: cand.content,
+            category: cand.type,
+            importance: cand.importance,
+            source: "llm-capture",
+          });
+          if (result.id) {
+            storedCount += 1;
+            if (firstId === null) firstId = result.id;
+          }
+        }
+        await recordCaptureEvent({
+          sessionID: sessionID ?? "",
+          scope: activeScope,
+          outcome: storedCount > 0 ? "stored" : "skipped",
+          skipReason: storedCount > 0 ? undefined : "llm-no-storable",
+          memoryId: firstId,
+          text: combined,
+        });
+        if (storedCount > 0) {
+          await state.store.pruneScope(activeScope, state.config.maxEntriesPerScope);
+        }
+        return {
+          stored: storedCount > 0,
+          id: firstId,
+          count: storedCount,
+          source: "llm-capture",
+        };
+      }
+      if (candidates !== null) {
+        // LLM ran fine but deliberately returned [] — a real verdict, not a
+        // failure. Record and skip (mirror LLM_EMPTY_VERDICT).
+        await recordCaptureEvent({
+          sessionID: sessionID ?? "",
+          scope: activeScope,
+          outcome: "skipped",
+          skipReason: "llm-empty-result",
+          text: combined,
+        });
+        return { stored: false, skipReason: "llm-empty-result" };
+      }
+      await recordCaptureEvent({
+        sessionID: sessionID ?? "",
+        scope: activeScope,
+        outcome: "llm-fallback",
+        skipReason: "llm-unavailable",
+        text: combined,
+      });
+    }
+
+    // Heuristics fallback (offline path).
     const result = extractCaptureCandidate(combined, state.config.minCaptureChars);
     if (!result.candidate) {
       await recordCaptureEvent({

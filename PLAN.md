@@ -97,6 +97,19 @@ Auth: loopback + bearer token (in `lorekeeper.json`, like mem0's pattern).
 5. ⏳ **Import old data** — `/root/.openclaw/memory/lancedb` → Lorekeeper
    (export from old store, import via /import).
 
+### LLM capture/digests (Phase 4b, done)
+
+- `server/llm_shim.js` — implements the OpenCode SDK client surface
+  (`session.create/prompt/delete`) over OpenRouter's OpenAI-compatible API, so
+  the fork's `requestLLMCapture`/`requestLLMDigest` run unchanged.
+- Config: `capture.mode=llm`, provider `openrouter`, model `minimax/minimax-m3`
+  (env `OPENCODE_MEMORY_PRO_CAPTURE_LLM_*`).
+- `OPENROUTER_API_KEY` auto-loaded from `$HERMES_HOME/.env` by the service.
+- `/capture` tries LLM extraction first; falls back to heuristics on any
+  failure (mirrors fork's `_flushAutoCaptureGuarded` + `LLM_EMPTY_VERDICT`).
+- Verified: one turn → 2 extracted memories (preference + fact), correct
+  categories/importance, `llmHealth: healthy`.
+
 ## Open questions
 
 - Embedding: default `ollama + nomic-embed-text` (matches fork default) —
