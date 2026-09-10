@@ -4,7 +4,9 @@
   "description": "LanceDB-backed long-term memory service for Hermes — self-contained fork of opencode-memory-pro v1.6.2 (MIT).",
   "type": "module",
   "main": "server/index.js",
-  "private": true,
+  "bin": {
+    "lorekeeper": "bin/lorekeeper"
+  },
   "license": "MIT",
   "engines": {
     "node": ">=22"

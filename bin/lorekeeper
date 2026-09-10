@@ -1,0 +1,99 @@
+#!/usr/bin/env node
+// Lorekeeper CLI — manage the memory service.
+//
+// Commands:
+//   lorekeeper serve     Start the service (foreground)
+//   lorekeeper status    Show service + DB health
+//   lorekeeper init      Initialize the store (idempotent)
+//   lorekeeper install   Install the Hermes provider into $HERMES_HOME/plugins/
+//
+// Env:
+//   LOREKEEPER_PORT, LOREKEEPER_TOKEN, LOREKEEPER_DB_PATH,
+//   LOREKEEPER_GRAPH_PATH, HERMES_HOME
+
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { join, dirname } from "node:path";
+import { homedir } from "node:os";
+import { readFileSync, mkdirSync, copyFileSync } from "node:fs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(HERE, "..");
+const HOME = homedir();
+const HERMES_HOME = process.env.HERMES_HOME || join(HOME, ".hermes");
+const PORT = process.env.LOREKEEPER_PORT || "18777";
+const BASE = `http://127.0.0.1:${PORT}`;
+const TOKEN_FILE = process.env.LOREKEEPER_TOKEN_PATH || join(HERMES_HOME, "lorekeeper", "token");
+
+function token() {
+  try { return readFileSync(TOKEN_FILE, "utf8").trim(); } catch { return ""; }
+}
+
+async function api(path, body) {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${token()}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+async function health() {
+  try {
+    const res = await fetch(`${BASE}/health`);
+    return res.ok ? await res.json() : null;
+  } catch { return null; }
+}
+
+async function cmdServe() {
+  // Re-exec the server in foreground.
+  const server = join(ROOT, "server", "index.js");
+  const proc = spawn(process.execPath, [server], { stdio: "inherit" });
+  proc.on("exit", (code) => process.exit(code ?? 0));
+}
+
+async function cmdStatus() {
+  const h = await health();
+  if (!h) {
+    console.log("lorekeeper: NOT running (expected at " + BASE + ")");
+    console.log("  start:  lorekeeper serve   (foreground)");
+    console.log("  or via: systemctl --user start lorekeeper");
+    process.exit(1);
+  }
+  console.log(`lorekeeper: running  (${BASE})`);
+  console.log(`  version     : ${h.version}`);
+  console.log(`  initialized : ${h.initialized}`);
+  console.log(`  db          : ${h.dbPath}`);
+  console.log(`  embedder    : ${h.embedder}`);
+  if (!h.initialized) {
+    console.log("  NOTE: store not initialized — run: lorekeeper init");
+  }
+}
+
+async function cmdInit() {
+  const res = await api("/init");
+  console.log(`lorekeeper: store initialized (dim=${res.dim})`);
+}
+
+async function cmdInstall() {
+  const src = join(ROOT, "provider");
+  const dst = join(HERMES_HOME, "plugins", "lorekeeper");
+  mkdirSync(dst, { recursive: true });
+  for (const f of ["__init__.py", "_client.py", "plugin.yaml"]) {
+    copyFileSync(join(src, f), join(dst, f));
+    console.log(`  installed provider/${f} -> ${join(dst, f)}`);
+  }
+  console.log("\nActivate with:");
+  console.log(`  hermes config set memory.provider lorekeeper`);
+}
+
+const args = process.argv.slice(1).filter((a) => !a.endsWith("bin/lorekeeper") && !a.endsWith("lorekeeper"));
+const cmd = args[0] || "serve";
+const table = { serve: cmdServe, status: cmdStatus, init: cmdInit, install: cmdInstall };
+if (!table[cmd]) {
+  console.error(`unknown command: ${cmd}`);
+  console.error("usage: lorekeeper <serve|status|init|install>");
+  process.exit(2);
+}
+await table[cmd]();

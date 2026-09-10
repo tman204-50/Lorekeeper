@@ -20,7 +20,28 @@ Hermes (Python)                    Lorekeeper service (Node, localhost:18777)
 - `server/` — the HTTP service wrapper.
 - `provider/` — the Hermes plugin (installed to `~/.hermes/plugins/lorekeeper/`).
 
-## Quickstart
+## One-command install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tman204-50/Lorekeeper/main/install.sh | bash
+```
+
+What it does:
+1. Clones the repo to `~/.local/share/lorekeeper` + `npm install` (LanceDB native deps)
+2. Creates `~/.hermes/lorekeeper/` data dir + auto-generates the bearer token
+3. Installs a `lorekeeper.service` systemd unit (user-level, auto-start)
+4. Copies the Hermes provider to `$HERMES_HOME/plugins/lorekeeper/`
+5. Sets `memory.provider = lorekeeper`
+6. Writes `$HERMES_HOME/lorekeeper.json` with host + token
+
+Requirements: node >= 22, npm, git, hermes CLI. Optional: ollama with
+`nomic-embed-text` (falls back to OpenAI embedder).
+
+Env overrides: `LOREKEEPER_REPO_URL`, `LOREKEEPER_REPO_REF`,
+`LOREKEEPER_INSTALL_DIR`, `LOREKEEPER_DATA_DIR`, `LOREKEEPER_PORT`,
+`HERMES_HOME`.
+
+## Manual quickstart
 
 ```bash
 npm install
