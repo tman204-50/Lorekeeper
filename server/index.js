@@ -76,10 +76,12 @@ if (!authToken) {
 process.env.OPENCODE_MEMORY_PRO_DB_PATH ??= DB_PATH;
 process.env.OPENCODE_MEMORY_PRO_GRAPH_DB_PATH ??= GRAPH_PATH;
 process.env.OPENCODE_MEMORY_PRO_SCOPING ??= "global"; // single-user
-// Per-turn capture (vs the fork's whole-session buffer): a single turn is
-// often 40-80 chars, so the fork's 80-char floor would skip most substantive
-// turns. Lower it; the signal-regex gate still filters noise.
-process.env.OPENCODE_MEMORY_PRO_MIN_CAPTURE_CHARS ??= "40";
+// Per-turn capture (vs the fork's whole-session buffer): a single turn used
+// to be 40-80 chars, so the fork's 80-char floor was lowered to 40. But short
+// noisy turns (questions, requests, one-liners) slip through at 40 chars; the
+// fork's own default of 80 filters more of them while still passing most
+// substantive turns. Heuristic FP reduction (2026-09-10): back to 80.
+process.env.OPENCODE_MEMORY_PRO_MIN_CAPTURE_CHARS ??= "80";
 // LLM capture/digests via the shim (OpenRouter + minimax/minimax-m3).
 // OPENROUTER_API_KEY is read from the environment (Hermes .env or export).
 process.env.OPENCODE_MEMORY_PRO_CAPTURE_MODE ??= "llm";
