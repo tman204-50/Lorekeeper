@@ -81,7 +81,7 @@ Auth: `Authorization: Bearer <token>` (token in `~/.hermes/lorekeeper/token`).
 - [x] Phase 3: full tool surface (34 fork tools via generic /tool dispatcher)
 - [x] Phase 4: auto-capture (service /capture + provider sync_turn/session hooks)
 - [x] Phase 4b: LLM capture/digests via OpenRouter shim (minimax/minimax-m3)
-- [ ] Phase 5: import old data from `/root/.openclaw/memory/lancedb`
+- [x] Phase 5: imported old OpenClaw gold memories (885, via import_old_data.mjs)
 
 See `PLAN.md` for details.
 

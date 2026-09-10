@@ -94,8 +94,13 @@ Auth: loopback + bearer token (in `lorekeeper.json`, like mem0's pattern).
    embed → dedup → store → graph → event → prune); provider `sync_turn`
    buffers each turn and flushes (per-turn + on_session_end / on_pre_compress /
    on_session_switch). minCaptureChars lowered to 40 for per-turn granularity.
-5. ⏳ **Import old data** — `/root/.openclaw/memory/lancedb` → Lorekeeper
-   (export from old store, import via /import).
+5. ✅ **Import old data** — `/root/.openclaw/memory/lancedb` → Lorekeeper.
+   Imported the **gold categories only** (memory/fact/preference/learning/
+   profile = 908 rows, 23 test-junk dropped → 885 imported) via
+   `import_old_data.mjs` (re-embeds with nomic-embed-text, preserves ids/
+   timestamps, maps old `memory` → `general`). Skipped the ~37k noise rows
+   (resource/event/conversation/daily-log) — they'd wreck recall. Store now:
+   888 memories (885 imported + 3 prior).
 
 ### LLM capture/digests (Phase 4b, done)
 
