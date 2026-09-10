@@ -82,6 +82,11 @@ process.env.OPENCODE_MEMORY_PRO_SCOPING ??= "global"; // single-user
 // fork's own default of 80 filters more of them while still passing most
 // substantive turns. Heuristic FP reduction (2026-09-10): back to 80.
 process.env.OPENCODE_MEMORY_PRO_MIN_CAPTURE_CHARS ??= "80";
+// Adaptive injection (2026-09-10): drop low-scoring memories below the floor
+// and summarize when the budget is tight, instead of always injecting up to
+// maxMemories verbatim. Knobs: scoreDropTolerance (0.15), injectionFloor (0.2).
+process.env.OPENCODE_MEMORY_PRO_INJECTION_MODE ??= "adaptive";
+process.env.OPENCODE_MEMORY_PRO_INJECTION_SUMMARIZATION ??= "auto";
 // LLM capture/digests via the shim (OpenRouter + minimax/minimax-m3).
 // OPENROUTER_API_KEY is read from the environment (Hermes .env or export).
 process.env.OPENCODE_MEMORY_PRO_CAPTURE_MODE ??= "llm";
