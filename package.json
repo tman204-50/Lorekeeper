@@ -1,0 +1,23 @@
+{
+  "name": "lorekeeper",
+  "version": "0.1.0",
+  "description": "LanceDB-backed long-term memory service for Hermes — self-contained fork of opencode-memory-pro v1.6.2 (MIT).",
+  "type": "module",
+  "main": "server/index.js",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test test/",
+    "vendor:sync": "rsync -a --delete /root/.hermes/workspace/opencode-memory-pro/dist/ vendor/dist/ && cp /root/.hermes/workspace/opencode-memory-pro/LICENSE vendor/ 2>/dev/null; cp /root/.hermes/workspace/opencode-memory-pro/opencode-memory-pro.example.json vendor/ 2>/dev/null; echo 'vendor synced'"
+  },
+  "dependencies": {
+    "@lancedb/lancedb": "^0.38.0",
+    "@opencode-ai/plugin": "^1.4.10",
+    "fuse.js": "^7.5.0",
+    "zod": "^4.1.8"
+  }
+}
