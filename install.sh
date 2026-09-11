@@ -130,6 +130,16 @@ cp "$INSTALL_DIR/provider/__init__.py" "$PLUGIN_DIR/"
 cp "$INSTALL_DIR/provider/_client.py" "$PLUGIN_DIR/"
 cp "$INSTALL_DIR/provider/plugin.yaml" "$PLUGIN_DIR/"
 
+# --- 5b. install usage skill -------------------------------------------------
+SKILL_DIR="$HERMES_HOME/skills/lorekeeper-usage"
+if [ -d "$INSTALL_DIR/skills/lorekeeper-usage" ]; then
+  log "Installing usage skill -> $SKILL_DIR"
+  mkdir -p "$SKILL_DIR"
+  cp "$INSTALL_DIR/skills/lorekeeper-usage/SKILL.md" "$SKILL_DIR/"
+else
+  warn "No skills/lorekeeper-usage in repo — skipping skill install"
+fi
+
 # --- 6. configure Hermes ------------------------------------------------------
 log "Activating memory.provider = lorekeeper"
 hermes config set memory.provider lorekeeper --force >/dev/null 2>&1 || \

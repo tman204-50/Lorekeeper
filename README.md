@@ -31,8 +31,9 @@ What it does:
 2. Creates `~/.hermes/lorekeeper/` data dir + auto-generates the bearer token
 3. Installs a `lorekeeper.service` systemd unit (user-level, auto-start)
 4. Copies the Hermes provider to `$HERMES_HOME/plugins/lorekeeper/`
-5. Sets `memory.provider = lorekeeper`
-6. Writes `$HERMES_HOME/lorekeeper.json` with host + token
+5. Copies the usage skill to `$HERMES_HOME/skills/lorekeeper-usage/`
+6. Sets `memory.provider = lorekeeper`
+7. Writes `$HERMES_HOME/lorekeeper.json` with host + token
 
 Requirements: node >= 22, npm, git, hermes CLI. Optional: ollama with
 `nomic-embed-text` (falls back to OpenAI embedder).
