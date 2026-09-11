@@ -79,6 +79,21 @@ Config: `~/.hermes/lorekeeper.json` via `hermes memory setup` (host field).
 
 Auth: `Authorization: Bearer <token>` (token in `~/.hermes/lorekeeper/token`).
 
+## CLI (`bin/lorekeeper`)
+
+The npm package ships a small CLI (also usable from a checkout via
+`node bin/lorekeeper`):
+
+```bash
+lorekeeper status    # service + DB health (exit 1 if not running)
+lorekeeper init      # initialize the store (idempotent)
+lorekeeper install   # copy provider/ -> $HERMES_HOME/plugins/lorekeeper/
+lorekeeper serve     # run the service in the foreground
+```
+
+Env: `LOREKEEPER_PORT`, `LOREKEEPER_TOKEN`, `LOREKEEPER_DB_PATH`,
+`LOREKEEPER_GRAPH_PATH`, `HERMES_HOME`.
+
 ## Env knobs
 
 - `LOREKEEPER_PORT` (default 18777), `LOREKEEPER_TOKEN`, `LOREKEEPER_DB_PATH`,
