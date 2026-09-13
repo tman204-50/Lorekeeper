@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="Lorekeeper logo" width="240">
+</p>
+
 # Lorekeeper
 
 LanceDB-backed long-term memory for Hermes Agent — a self-contained fork of
