@@ -129,6 +129,7 @@ mkdir -p "$PLUGIN_DIR"
 cp "$INSTALL_DIR/provider/__init__.py" "$PLUGIN_DIR/"
 cp "$INSTALL_DIR/provider/_client.py" "$PLUGIN_DIR/"
 cp "$INSTALL_DIR/provider/plugin.yaml" "$PLUGIN_DIR/"
+cp "$INSTALL_DIR/provider/tools.py" "$PLUGIN_DIR/"
 
 # --- 5b. install usage skill -------------------------------------------------
 SKILL_DIR="$HERMES_HOME/skills/lorekeeper-usage"

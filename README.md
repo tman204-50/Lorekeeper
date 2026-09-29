@@ -126,6 +126,66 @@ Env: `LOREKEEPER_PORT`, `LOREKEEPER_TOKEN`, `LOREKEEPER_DB_PATH`,
 
 See `PLAN.md` for details.
 
+## Deploying for a second/remote/containerized Hermes (the 3-hour pitfalls)
+
+A second Hermes install (another box, a Docker container, or a peer agent like
+Adriana) should get **its own Lorekeeper service and store** — not a shared one.
+Auto-captured stores are ~95% operational noise; sharing wrecked recall in
+testing. One service per HERMES_HOME, one store each. Battle-tested procedure
+from the Janus/Adriana deployment (2026-09-29):
+
+1. **Prereqs on the target host**: Node ≥ 22, git, Ollama + `ollama pull
+   nomic-embed-text` (CPU-only is fine for embeddings). If the host's apt mirror
+   is dead, install Node from the official tarball and fix the mirror separately.
+2. **Bind address**: the service hard-binds `127.0.0.1` by default. For a
+   containerized Hermes on the same host, set `LOREKEEPER_HOST=0.0.0.0` in the
+   unit and point the client at the host's LAN IP (`LOREKEEPER_HOST` env /
+   `lorekeeper.json` `host`). Token auth is mandatory whenever the port leaves
+   loopback.
+3. **One container only.** If the target runs Docker, verify there is exactly
+   ONE Hermes container and that its published ports are the ones your clients
+   actually hit (`docker ps` — an old duplicate container serving the real ports
+   cost us hours: every restart hit the wrong container). Put the service under
+   systemd/s6 inside that container's host with `Restart=on-failure`.
+4. **Stale gateway lock**: after recreating containers, `~/.local/state/hermes/
+   gateway-locks/host-gateway.json` can pin a PID that no longer exists; every
+   new gateway then refuses to start ("Refusing to start a second gateway").
+   `rm` the lock + `gateway_state.json` and restart the gateway service. Note
+   `docker restart` may NOT bounce the in-container gateway — stop/start the
+   gateway service itself.
+5. **Plugin file permissions**: the container typically runs as uid 10000 while
+   files written from the host are root:root 600. `chown 10000:10000` the
+   plugin dir, `lorekeeper.json`, `lorekeeper/token`, and the usage skill.
+6. **Config keys that must all be true at once** (any one missing = tools
+   silently absent):
+   - `memory.provider: lorekeeper` and `memory.memory_enabled: true`
+   - plugin files in `$HERMES_HOME/plugins/lorekeeper/` (including `tools.py`)
+   - `plugins.enabled: [lorekeeper]` — provider registration alone does NOT
+     expose tools
+   - `known_plugin_toolsets.<platform>` must NOT list `lorekeeper` unless the
+     platform's `platform_toolsets` list also includes it (known-but-absent =
+     disabled)
+   - the session's platform toolset must include the `memory` toolset (or the
+     plugin toolset) — the provider tool injection is gated on it
+7. **Session pinning**: sessions freeze their model AND their tool array at
+   creation (`sessions.tool_names` pin); config changes never reach an existing
+   session. `session_reset.mode: none` makes this permanent. After changing
+   config, close the open sessions (`sessions.ended_at`) / start a new session —
+   a gateway restart alone does not do it.
+8. **Models**: sessions pin the model at creation; a config model switch only
+   applies to new sessions.
+
+Verification sequence (all must pass): `curl :18777/health` from inside the
+container namespace; `hermes config get memory.provider` inside the container;
+agent.log shows `Memory provider 'lorekeeper' registered (34 tools)`; and the
+agent can actually invoke `lorekeeper_stats` and `lorekeeper_remember` (test on
+a fresh session, then delete the test memory — fresh rows outrank old history).
+
+The tools.py plugin-toolset path makes the tools reach the model payload on
+every platform/build; some builds inject memory-provider tools after the
+tool_search assembly snapshot so they never reach the model — the toolset path
+is immune.
+
 ## Notes
 
 - `npm audit` reports 3 high-severity findings in `sharp` (transitive via
