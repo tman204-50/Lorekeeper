@@ -35,6 +35,7 @@ import { LLMSessionClient } from "./llm_shim.js";
 const SCHEMA_VERSION = 1;
 
 const PORT = Number(process.env.LOREKEEPER_PORT ?? 18777);
+const HOST = process.env.LOREKEEPER_HOST ?? "127.0.0.1";
 const HOME = homedir();
 const DB_PATH = process.env.LOREKEEPER_DB_PATH ?? join(HOME, ".hermes", "lorekeeper", "lancedb");
 const GRAPH_PATH = process.env.LOREKEEPER_GRAPH_PATH ?? join(HOME, ".hermes", "lorekeeper", "graph.db");
@@ -643,8 +644,8 @@ if (!TOKEN) {
   log("info", `token written to ${tokenPath}`);
 }
 
-server.listen(PORT, "127.0.0.1", () => {
-  log("info", `Lorekeeper service listening on http://127.0.0.1:${PORT}`);
+server.listen(PORT, HOST, () => {
+  log("info", `Lorekeeper service listening on http://${HOST}:${PORT}`);
 });
 
 process.once("exit", () => {
