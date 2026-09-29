@@ -32,6 +32,10 @@ export class LLMSessionClient {
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${this.apiKey}`,
+        // OpenRouter app attribution (Hermes sends the same trio):
+        "user-agent": "lorekeeper/1.0 (Hermes memory provider)",
+        "http-referer": "https://github.com/tman204-50/Lorekeeper",
+        "x-title": "Lorekeeper",
       },
       body: JSON.stringify(body),
     });
