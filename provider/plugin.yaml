@@ -1,3 +1,40 @@
 name: lorekeeper
 version: 0.1.0
 description: "Lorekeeper — local LanceDB long-term memory (vector + BM25 hybrid, entity graph) via the Node service. Self-contained fork of opencode-memory-pro."
+# The lorekeeper_* client tools. Declaring them here is what asks discovery to
+# import `tools.py` in CLI/TUI processes, where the plugin is otherwise deferred
+# and the tools would never register at all (mirrors platforms/a2a #78050).
+provides_tools:
+  - lorekeeper_search
+  - lorekeeper_remember
+  - lorekeeper_forget
+  - lorekeeper_delete
+  - lorekeeper_clear
+  - lorekeeper_stats
+  - lorekeeper_event_cleanup
+  - lorekeeper_dashboard
+  - lorekeeper_kpi
+  - lorekeeper_export
+  - lorekeeper_import
+  - lorekeeper_consolidate
+  - lorekeeper_consolidate_all
+  - lorekeeper_reembed
+  - lorekeeper_summarize
+  - lorekeeper_expire
+  - lorekeeper_feedback_useful
+  - lorekeeper_feedback_wrong
+  - lorekeeper_feedback_missing
+  - lorekeeper_why
+  - lorekeeper_explain_recall
+  - lorekeeper_citation
+  - lorekeeper_validate_citation
+  - lorekeeper_task_episode_create
+  - lorekeeper_task_episode_query
+  - lorekeeper_similar_task_recall
+  - lorekeeper_retry_budget_suggest
+  - lorekeeper_recovery_strategy_suggest
+  - lorekeeper_global_list
+  - lorekeeper_scope_promote
+  - lorekeeper_scope_demote
+  - lorekeeper_what_did_you_learn
+  - lorekeeper_port_plan

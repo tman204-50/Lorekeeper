@@ -310,5 +310,13 @@ class LorekeeperMemoryProvider(MemoryProvider):
 
 
 def register(ctx) -> None:
-    """Register Lorekeeper as a memory provider plugin."""
+    """Register Lorekeeper as a memory provider plugin + plugin toolset."""
     ctx.register_memory_provider(LorekeeperMemoryProvider())
+    # Also register the toolset path: on some builds (notably the api_server
+    # platform on vgit.99721dc) memory-provider tool injection never reaches
+    # the model payload. Plugin toolsets flow through the normal registry on
+    # every platform, and the provider's own injection skips already-present
+    # names, so registering both paths is duplicate-safe everywhere.
+    with suppress(Exception):
+        from .tools import register_tools
+        register_tools(ctx)
