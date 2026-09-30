@@ -427,6 +427,17 @@ const handlers = {
       : await state.store.softDeleteMemory(id, ["global"]);
     return { ok: !!ok, id };
   },
+  async consolidate(args) {
+    // Heavy LLM-backed dedup — exposed over HTTP so long-running
+    // consolidations aren't killed by the gateway's tool-call timeout.
+    await ensureInit();
+    const scope = args?.scope ?? "global";
+    if (scope !== "global" && !state.store) return { error: "scope not supported" };
+    const threshold = state.config.dedup?.consolidateThreshold;
+    const candidateLimit = state.config.dedup?.candidateLimit;
+    const result = await state.store.consolidateDuplicates(scope, threshold, candidateLimit);
+    return { ok: true, scope, result };
+  },
   async stats() {
     await ensureInit();
     const records = await state.store.readAllActive();
