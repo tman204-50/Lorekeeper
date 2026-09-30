@@ -181,10 +181,46 @@ agent.log shows `Memory provider 'lorekeeper' registered (34 tools)`; and the
 agent can actually invoke `lorekeeper_stats` and `lorekeeper_remember` (test on
 a fresh session, then delete the test memory — fresh rows outrank old history).
 
-The tools.py plugin-toolset path makes the tools reach the model payload on
-every platform/build; some builds inject memory-provider tools after the
-tool_search assembly snapshot so they never reach the model — the toolset path
-is immune.
+**Gateway/api_server deployments need an explicit toolset entry.** Hermes
+classifies a memory-provider plugin `kind=exclusive` and skips it during
+plugin discovery, so the `provides_tools` / `tools.py` plugin-toolset path
+never engages for this plugin — the toolset key never lands in
+`plugin_toolset_keys.json` (the gateway rewrites that cache from discovery
+on every boot, dropping hand-added keys). The tools DO register into the
+model_tools registry via the memory-provider path (`Memory provider
+'lorekeeper' registered (34 tools)`), but sessions on the OpenAI-HTTP/A2A
+gateway (`platform: api_server`) resolve their toolset scope from
+`platform_toolsets` — and `api_server` is absent from that map by default,
+so the 34 tools sit in the registry, out of scope, and every call fails
+with "'lorekeeper_*' is not available in this session". The durable fix is
+an explicit entry (verified on Janus/Adriana 2026-09-29, survives container
+restarts and cache rewrites):
+
+```yaml
+platform_toolsets:
+  api_server:
+    - browser
+    - code_execution
+    - connections
+    - cronjob
+    - delegation
+    - file
+    - image_gen
+    - memory
+    - lorekeeper        # <- required for gateway sessions
+    - session_search
+    - skills
+    - terminal
+    - todo
+    - vision
+    - web
+```
+
+(That list is the stock `api_server` default plus `lorekeeper`; saving it
+makes the list authoritative, so include the defaults. The `memory` entry
+gates the provider tool injection — keep it.) `provider/tools.py` still
+ships: harmless where it cannot load, load-bearing where a future Hermes
+build stops classifying providers as exclusive.
 
 ## Notes
 
