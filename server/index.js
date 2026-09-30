@@ -451,7 +451,23 @@ const handlers = {
     let candidates = null;
     if (state.config.capture?.mode === "llm" && state.client) {
       try {
-        candidates = await requestLLMCapture(state.client, state.config.capture.llm, combined, sessionID ?? "");
+        // Hard cap on the whole extraction (vendor retries 3x on bad JSON);
+        // a stuck capture must never wedge the single-threaded service.
+        const CAPTURE_TIMEOUT_MS = 90_000;
+        let captureTimer;
+        try {
+          candidates = await Promise.race([
+            requestLLMCapture(state.client, state.config.capture.llm, combined, sessionID ?? ""),
+            new Promise((_, reject) => {
+              captureTimer = setTimeout(
+                () => reject(new Error(`capture extraction timed out after ${CAPTURE_TIMEOUT_MS}ms`)),
+                CAPTURE_TIMEOUT_MS
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(captureTimer);
+        }
       } catch (error) {
         log("warn", `[capture] llm extraction failed: ${error}`);
         candidates = null;

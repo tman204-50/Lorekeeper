@@ -29,6 +29,8 @@ export class LLMSessionClient {
     };
     const resp = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",
+      // Hard timeout: never let a hung OpenRouter call wedge the event loop.
+      signal: AbortSignal.timeout(this.timeoutMs),
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${this.apiKey}`,
