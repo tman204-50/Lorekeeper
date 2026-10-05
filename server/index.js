@@ -37,7 +37,7 @@ const SCHEMA_VERSION = 1;
 // Bump together with provider/_version.py __version__ and provider/plugin.yaml
 // "version" — logged at boot and served from /health so we can track which
 // code is actually loaded.
-const SERVICE_VERSION = "0.2.0";
+const SERVICE_VERSION = "0.2.1";
 
 const PORT = Number(process.env.LOREKEEPER_PORT ?? 18777);
 const HOST = process.env.LOREKEEPER_HOST ?? "127.0.0.1";
