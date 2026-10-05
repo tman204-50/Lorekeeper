@@ -485,11 +485,16 @@ const handlers = {
   },
   async stats() {
     await ensureInit();
-    const records = await state.store.readAllActive();
-    const byScope = {};
-    for (const r of records) byScope[r.scope] = (byScope[r.scope] ?? 0) + 1;
+    // STATS_COUNT_ONLY: scope-only scan, not readAllActive (all 25 columns
+    // incl. vectors) just to count rows.
+    const byScope = state.store.countActiveByScope ? await state.store.countActiveByScope() : {};
+    if (!state.store.countActiveByScope) {
+      const records = await state.store.readAllActive();
+      for (const r of records) byScope[r.scope] = (byScope[r.scope] ?? 0) + 1;
+    }
+    const total = Object.values(byScope).reduce((a, b) => a + b, 0);
     return {
-      counts: { total: records.length, byScope },
+      counts: { total, byScope },
       index: state.store.getIndexHealth ? await state.store.getIndexHealth() : null,
       initialized: state.initialized,
     };
@@ -508,17 +513,21 @@ const handlers = {
     if (state.config.capture?.mode === "llm" && state.client) {
       try {
         // Hard cap on the whole extraction (vendor retries 3x on bad JSON);
-        // a stuck capture must never wedge the single-threaded service.
+        // a stuck capture must never wedge the single-threaded service. The
+        // controller ABORTS the OpenRouter generation — without it the
+        // fetch keeps running to completion (vendor up to 3 attempts) with
+        // the result discarded, i.e. pure spend after the caller gave up.
         const CAPTURE_TIMEOUT_MS = 90_000;
+        const controller = new AbortController();
         let captureTimer;
         try {
           candidates = await Promise.race([
-            requestLLMCapture(state.client, state.config.capture.llm, combined, sessionID ?? ""),
+            requestLLMCapture(state.client.withSignal(controller.signal), state.config.capture.llm, combined, sessionID ?? ""),
             new Promise((_, reject) => {
-              captureTimer = setTimeout(
-                () => reject(new Error(`capture extraction timed out after ${CAPTURE_TIMEOUT_MS}ms`)),
-                CAPTURE_TIMEOUT_MS
-              );
+              captureTimer = setTimeout(() => {
+                controller.abort();
+                reject(new Error(`capture extraction timed out after ${CAPTURE_TIMEOUT_MS}ms`));
+              }, CAPTURE_TIMEOUT_MS);
             }),
           ]);
         } finally {

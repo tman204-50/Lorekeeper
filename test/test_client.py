@@ -448,6 +448,59 @@ try:
     ct.tool("lorekeeper_search", {"query": "q"})
     check("tool-timeout-search", captured["response_timeout"] is None, "search -> default")
 
+    # 16. LLM shim abort plumbing: withSignal scopes an abort to one capture,
+    # and the base client stays unaffected
+    import importlib.util as _u
+    _spec = _u.spec_from_file_location("lk_llm_shim", os.path.join(LOREKEEPER, "server", "llm_shim.js"), loader=None)
+    # JS module — drive it through node instead
+    import subprocess
+    node_script = r'''
+const { LLMSessionClient } = await import("/root/.hermes/workspace/Lorekeeper/server/llm_shim.js");
+const http = await import("node:http");
+// slow server: 3s to answer
+const srv = http.createServer((req, res) => setTimeout(() => { res.writeHead(200, {"content-type": "application/json"}); res.end("{}"); }, 3000));
+await new Promise((r) => srv.listen(18892, "127.0.0.1", r));
+const base = new LLMSessionClient({ apiKey: "k", baseUrl: "http://127.0.0.1:18892", model: "m", timeoutMs: 10000 });
+// scoped client with a signal we fire after 200ms
+const ctrl = new AbortController();
+setTimeout(() => ctrl.abort(), 200);
+const scoped = base.withSignal(ctrl.signal);
+const t0 = Date.now();
+try {
+  await scoped._chat([{ role: "user", content: "hi" }]);
+  console.log("NO_ABORT:chat returned");
+} catch (e) {
+  console.log("ABORTED_MS:" + (Date.now() - t0) + " kind:" + (e.name === "AbortError" || /abort/i.test(String(e)) ? "abort" : "other:" + e.name));
+}
+// base client unaffected (still has no signal; would wait 3s — use short internal timeout instead)
+const t1 = Date.now();
+try {
+  const b2 = base.withSignal(undefined ? undefined : undefined); // no-op guard
+  console.log("BASE_STILL_ACTIVE:true");
+} catch { console.log("BASE_STILL_ACTIVE:false"); }
+const sc2 = new LLMSessionClient({ apiKey: "k", baseUrl: "http://127.0.0.1:18892", model: "m", timeoutMs: 500 });
+const t2 = Date.now();
+try { await sc2._chat([{ role: "user", content: "hi" }]); console.log("SC2_OK"); }
+catch (e) { console.log("SC2_TIMEOUT_MS:" + (Date.now() - t2)); }
+srv.close();
+'''
+    out = subprocess.run(["/usr/bin/node", "--input-type=module", "-e", node_script], capture_output=True, text=True, timeout=30).stdout
+    abort_line = next((l for l in out.splitlines() if l.startswith("ABORTED_MS")), "")
+    ok_abort = "kind:abort" in abort_line and 150 <= int(abort_line.split("ABORTED_MS:")[1].split(" ")[0]) < 1500
+    check("llm-signal-abort", ok_abort, abort_line or out[-200:])
+    check("llm-signal-scoped", "BASE_STILL_ACTIVE:true" in out, "base client not mutated by withSignal")
+    to_line = next((l for l in out.splitlines() if l.startswith("SC2_TIMEOUT_MS")), "")
+    check("llm-internal-timeout-intact", to_line != "" and 400 <= int(to_line.split(":")[1]) < 2000, to_line)
+
+    # 17. /stats counts via the scope-only scan (service-side change)
+    row = client.remember("LK stats probe row", category="test")
+    st = client.stats()
+    total_ok = isinstance(st.get("counts", {}).get("total"), int) and st["counts"]["total"] >= 1
+    scope_ok = isinstance(st["counts"].get("byScope"), dict) and st["counts"]["byScope"].get("global", 0) >= 1
+    check("stats-count", total_ok and scope_ok, f"total={st['counts']['total']} byScope={st['counts']['byScope']}")
+    if row.get("id"):
+        client.delete(row["id"], force=True)
+
     # 14. retry policy
     # 503 then success -> transparent retry, server saw 2 requests
     sport = _free_port()

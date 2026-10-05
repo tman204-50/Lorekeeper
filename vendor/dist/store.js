@@ -3366,6 +3366,7 @@ export class MemoryStore {
     // read only ["global"], so project-scoped memories (scoping:"project")
     // never entered the entity graph. Reads every active row across ALL
     // scopes with the same status filter as readByScopes.
+    // ACTIVE_ROWS_FILTER: shared by readAllActive and countActiveByScope.
     async readAllActive() {
         const table = this.requireTable();
         const rows = await table
@@ -3404,6 +3405,22 @@ export class MemoryStore {
         return rows
             .map((row) => normalizeRow(row))
             .filter((row) => row !== null);
+    }
+    // STATS_COUNT_ONLY (0.2.1): /stats used readAllActive() — all 25 columns
+    // including 1024-dim vectors — just to count rows. This scans scope only.
+    async countActiveByScope() {
+        const table = this.requireTable();
+        const rows = await table
+            .query()
+            .where(`(status != 'disabled' OR status IS NULL OR status = '') AND NOT (status = 'merged') AND NOT (status = 'digested') AND NOT (metadataJson LIKE '%"status":"merged"%')`)
+            .select(["scope"])
+            .toArray();
+        const byScope = {};
+        for (const row of rows) {
+            const scope = row.scope ?? "global";
+            byScope[scope] = (byScope[scope] ?? 0) + 1;
+        }
+        return byScope;
     }
     async ensureIndexes() {
         const table = this.requireTable();

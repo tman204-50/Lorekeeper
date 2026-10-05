@@ -19,6 +19,14 @@ export class LLMSessionClient {
     this.model = model;
     this.timeoutMs = timeoutMs;
     this.sessions = new Map(); // id -> [{role, content}]
+    this._signal = undefined; // optional per-call abort (see withSignal)
+  }
+
+  // Scoped view of this client whose _chat aborts when `signal` fires (the
+  // session create/prompt/delete surface is fixed by the vendor, so the
+  // signal rides on a derived instance instead of each call).
+  withSignal(signal) {
+    return Object.create(this, { _signal: { value: signal, enumerable: false } });
   }
 
   async _chat(messages, system) {
@@ -27,15 +35,19 @@ export class LLMSessionClient {
       messages: system ? [{ role: "system", content: system }, ...messages] : messages,
       temperature: 0.2,
     };
+    const signals = [AbortSignal.timeout(this.timeoutMs)];
+    if (this._signal) signals.push(this._signal);
     const resp = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",
-      // Hard timeout: never let a hung OpenRouter call wedge the event loop.
-      signal: AbortSignal.timeout(this.timeoutMs),
+      // Hard timeout + optional external abort: never let a hung OpenRouter
+      // call wedge the event loop, and stop paying for generations the caller
+      // already gave up on.
+      signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${this.apiKey}`,
         // OpenRouter app attribution (Hermes sends the same trio):
-        "user-agent": "lorekeeper/1.0 (Hermes memory provider)",
+        "user-agent": `lorekeeper/1.0 (Hermes memory provider)`,
         "http-referer": "https://github.com/tman204-50/Lorekeeper",
         "x-title": "Lorekeeper",
       },
