@@ -45,6 +45,46 @@ def _free_port():
     return port
 
 
+class _ScriptedStatusServer:
+    """Serves a scripted sequence of (status, body) per request; counts requests."""
+
+    def __init__(self, port, script):
+        self.script = list(script)
+        self.requests = 0
+        self.lock = threading.Lock()
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                if length:
+                    self.rfile.read(length)
+                with outer.lock:
+                    idx = outer.requests
+                    outer.requests += 1
+                    status, body = outer.script[idx] if idx < len(outer.script) else (200, b'{"ok": true}')
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        self.port = port
+
+    def start(self):
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def stop(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
 class _SlowCaptureServer:
     """HTTP server where /capture takes 2s to answer; everything else is instant."""
 
@@ -281,7 +321,7 @@ try:
     # 9. reconnect + failure lines present
     reconnects = [m for m in msgs if "reconnecting" in m]
     check("log-reconnect", len(reconnects) >= 1, f"e.g. {reconnects[0] if reconnects else 'none'}")
-    unreachable = [m for m in msgs if "unreachable after reconnect" in m]
+    unreachable = [m for m in msgs if "unreachable after" in m]
     check("log-unreachable", len(unreachable) >= 1, f"e.g. {unreachable[0] if unreachable else 'none'}")
     http_err = [m for m in msgs if "HTTP 401" in m]
     check("log-http-error", len(http_err) >= 1, f"e.g. {http_err[0] if http_err else 'none'}")
@@ -382,6 +422,67 @@ try:
         c0.close()
     finally:
         cjson.stop()
+
+    # 14. retry policy
+    # 503 then success -> transparent retry, server saw 2 requests
+    sport = _free_port()
+    scripted = _ScriptedStatusServer(sport, [(503, b'{"error": "overloaded"}')])
+    scripted.start()
+    try:
+        cr = LorekeeperClient(f"http://127.0.0.1:{sport}", TOKEN, timeout=5.0)
+        t0 = time.monotonic()
+        resp = cr.search("retry me")
+        check("transient-5xx-retry", resp.get("ok") is True and scripted.requests == 2,
+              f"503 -> retry -> ok ({time.monotonic() - t0:.2f}s, {scripted.requests} requests)")
+        cr.close()
+    finally:
+        scripted.stop()
+
+    # 503 always -> budget exhausted -> LorekeeperError (1 retry only)
+    sport = _free_port()
+    scripted = _ScriptedStatusServer(sport, [(503, b'{"error": "overloaded"}')] * 5)
+    scripted.start()
+    try:
+        cr = LorekeeperClient(f"http://127.0.0.1:{sport}", TOKEN, timeout=5.0)
+        try:
+            cr.search("always 503")
+            check("transient-budget", False, "no error raised")
+        except LorekeeperError as e:
+            check("transient-budget", "HTTP 503" in str(e) and scripted.requests == 2,
+                  f"exhausted after {scripted.requests} requests: {str(e)[:60]}")
+        cr.close()
+    finally:
+        scripted.stop()
+
+    # 500 -> deterministic answer, NO retry
+    sport = _free_port()
+    scripted = _ScriptedStatusServer(sport, [(500, b'{"error": "boom"}')] * 3)
+    scripted.start()
+    try:
+        cr = LorekeeperClient(f"http://127.0.0.1:{sport}", TOKEN, timeout=5.0)
+        try:
+            cr.search("deterministic 500")
+            check("no-retry-on-500", False, "no error raised")
+        except LorekeeperError as e:
+            check("no-retry-on-500", "HTTP 500" in str(e) and scripted.requests == 1,
+                  f"exactly {scripted.requests} request: {str(e)[:60]}")
+        cr.close()
+    finally:
+        scripted.stop()
+
+    # connection refused -> backoff retries then clean error; measure the delay
+    dead_port = _free_port()
+    cr = LorekeeperClient(f"http://127.0.0.1:{dead_port}", TOKEN, timeout=2.0)
+    t0 = time.monotonic()
+    try:
+        cr.search("nobody home")
+        check("refused-backoff", False, "no error raised")
+    except LorekeeperError as e:
+        elapsed = time.monotonic() - t0
+        within = 0.55 <= elapsed < 10.0  # 0.2 + 0.4 backoff, well under timeouts
+        check("refused-backoff", "unreachable" in str(e) and within,
+              f"error after {elapsed:.2f}s (expect >= 0.55s backoff): {str(e)[:60]}")
+    cr.close()
 finally:
     if proc.poll() is None:
         proc.terminate()

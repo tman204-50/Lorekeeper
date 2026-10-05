@@ -24,6 +24,18 @@ logger = logging.getLogger("lorekeeper.client")
 
 _syslog_ready = False
 
+# Retry policy (see _request): stale keep-alive and generic transport errors
+# get one immediate reconnect; connection-refused (service restarting) gets
+# backoff retries because a refused connect means the request never reached
+# the app (safe to replay even for remember); transient gateway statuses get
+# one backoff retry; everything else (500, 4xx) is a deterministic server
+# answer and fails immediately.
+_RECONNECT_RETRIES = 1
+_REFUSED_RETRIES = 2
+_CONNECT_RETRY_DELAYS = (0.2, 0.4)
+_SERVER_ERROR_RETRY_DELAY = 0.3
+_TRANSIENT_STATUSES = {502, 503, 504}
+
 
 def _ensure_syslog_logger() -> None:
     """Route lorekeeper.client records to syslog the way hermes does.
@@ -173,8 +185,11 @@ class LorekeeperClient:
         body = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
         headers = {"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"}
         transport_err: Optional[Exception] = None
+        attempt = 0  # reconnect budget (stale keep-alive / generic transport errors)
+        refused_retries = 0  # connection-refused budget (service restart race)
+        transient_retried = False  # 502/503/504: one backoff retry
         with self._lock:
-            for attempt in (0, 1):
+            while True:
                 reused = self._conn is not None
                 started = time.monotonic()
                 try:
@@ -197,6 +212,15 @@ class LorekeeperClient:
                         "reused" if reused else "new",
                     )
                     if resp.status // 100 != 2:
+                        if resp.status in _TRANSIENT_STATUSES and not transient_retried:
+                            # Gateway/transient: the server explicitly says it
+                            # didn't process the request — safe to replay.
+                            transient_retried = True
+                            self._close_conn()
+                            logger.info("%s %s -> HTTP %s (transient), retrying in %.1fs",
+                                        method, path, resp.status, _SERVER_ERROR_RETRY_DELAY)
+                            time.sleep(_SERVER_ERROR_RETRY_DELAY)
+                            continue
                         # A real server answer: no retry, surface it.
                         detail = raw.decode("utf-8", "replace")[:200]
                         logger.error("%s %s -> HTTP %s: %s", method, path, resp.status, detail)
@@ -205,12 +229,29 @@ class LorekeeperClient:
                 except LorekeeperError:
                     raise
                 except (http.client.HTTPException, OSError) as e:
+                    # Dropped socket (stale keep-alive) or failed connect:
+                    # drop the connection and retry per the policy above.
                     self._close_conn()
                     transport_err = e
-                    if attempt:
-                        logger.error("%s %s unreachable after reconnect: %s", method, path, e)
-                        break
-                    logger.info("%s %s stale connection (%s), reconnecting", method, path, type(e).__name__)
+                    if reused:
+                        if attempt >= _RECONNECT_RETRIES:
+                            logger.error("%s %s unreachable after reconnect: %s", method, path, e)
+                            break
+                        attempt += 1
+                        logger.info("%s %s stale connection (%s), reconnecting", method, path, type(e).__name__)
+                        continue
+                    if isinstance(e, ConnectionRefusedError) and refused_retries < _REFUSED_RETRIES:
+                        delay = _CONNECT_RETRY_DELAYS[refused_retries]
+                        refused_retries += 1
+                        logger.info("%s %s refused (%s), retrying in %.1fs", method, path, type(e).__name__, delay)
+                        time.sleep(delay)
+                        continue
+                    if attempt < _RECONNECT_RETRIES:
+                        attempt += 1
+                        logger.info("%s %s connection error (%s), reconnecting", method, path, type(e).__name__)
+                        continue
+                    logger.error("%s %s unreachable after retries: %s", method, path, e)
+                    break
         raise LorekeeperError(f"Lorekeeper service unreachable at {self._base}: {transport_err}") from transport_err
 
     # -- endpoints -----------------------------------------------------------
