@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
@@ -44,6 +45,44 @@ _CAPTURE_FLUSH_CHARS = 1200
 # Cap on assistant text fed to a single turn's buffer: extraction only needs
 # the substance, not full code dumps (assistant output can hit 60k chars).
 _CAPTURE_TURN_MAX_CHARS = 6000
+# Prefetch query shaping: the raw turn text is a poor recall query when long —
+# the embedder averages every topic into one diluted vector and BM25 floods.
+# Cap the query (user messages front-load intent) and drop embedding poison
+# (code blocks, URLs). Override via lorekeeper.json "prefetchQueryChars".
+_PREFETCH_QUERY_CHARS_DEFAULT = 400
+
+_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+_URL_RE = re.compile(r"https?://\S+")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.?!])\s+")
+
+
+def _shape_prefetch_query(message: str, max_chars: int) -> str:
+    """Shape a turn's raw text into a concise recall query.
+
+    Order: strip embedding poison (fenced code blocks, URLs), collapse
+    whitespace; if it fits, that's the query. Otherwise prefer question
+    sentences (the actual ask), falling back to head truncation at a
+    sentence boundary. Idempotent: shaping an already-shaped query returns
+    it unchanged (safe to apply in both on_turn_start and prefetch).
+    """
+    text = message or ""
+    if not text.strip():
+        return ""
+    text = _FENCE_RE.sub(" ", text)
+    text = _URL_RE.sub(" ", text)
+    text = " ".join(text.split())
+    if len(text) <= max_chars:
+        return text
+    questions = [s for s in _SENTENCE_SPLIT_RE.split(text) if s.endswith("?")]
+    picked = " ".join(questions)
+    if picked and len(picked) <= max_chars:
+        return picked
+    head = text[:max_chars]
+    cut = max(head.rfind(". "), head.rfind("? "), head.rfind("! "))
+    if cut > max_chars // 2:
+        return head[:cut + 1]
+    space = head.rfind(" ")
+    return head[:space] if space > 0 else head
 
 
 def _read_config(hermes_home: Path) -> dict:
@@ -153,8 +192,21 @@ class LorekeeperMemoryProvider(MemoryProvider):
 
     # -- recall --------------------------------------------------------------
 
+    def _prefetch_query_text(self, message: str) -> str:
+        """Shape the turn text for recall (see _shape_prefetch_query). Applied
+        identically in on_turn_start and prefetch so both entry points key on
+        the same shaped query — shaping is idempotent."""
+        if not message or not isinstance(message, str):
+            return message if isinstance(message, str) else ""
+        try:
+            max_chars = int(self._config.get("prefetchQueryChars") or _PREFETCH_QUERY_CHARS_DEFAULT)
+        except (TypeError, ValueError):
+            max_chars = _PREFETCH_QUERY_CHARS_DEFAULT
+        shaped = _shape_prefetch_query(message, max_chars)
+        return shaped or message[:max_chars].strip()
+
     def on_turn_start(self, turn_number: int, message: str, **kwargs) -> None:
-        self._start_prefetch(message)
+        self._start_prefetch(self._prefetch_query_text(message))
 
     def _start_prefetch(self, query: str) -> Optional[Future]:
         client = self._client
@@ -181,6 +233,7 @@ class LorekeeperMemoryProvider(MemoryProvider):
         return fut
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
+        query = self._prefetch_query_text(query)
         with self._prefetch_lock:
             if self._prefetch_query != query or not self._prefetch_done:
                 cached = None
