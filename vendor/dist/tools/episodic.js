@@ -59,7 +59,10 @@ export function createEpisodicTools(state) {
             description: "Query task episodes by scope and state",
             args: {
                 scope: tool.schema.string().optional(),
-                state: tool.schema.string().optional(),
+                // Episodes are created as "pending" and move through
+                // running/success/failed (store.updateTaskState). A free-form
+                // string let the model guess "active" and match nothing.
+                state: tool.schema.enum(["pending", "running", "success", "failed"]).optional(),
                 limit: tool.schema.number().int().min(1).max(100).default(10),
             },
             execute: async (args, context) => {
@@ -134,7 +137,10 @@ export function createEpisodicTools(state) {
                 if (typeof result === "string")
                     return result;
                 if (!result) {
-                    return `Insufficient data for retry budget suggestion (need at least ${args.minSamples} failed tasks)`;
+                    // args.minSamples is undefined when the model omits it
+                    // (zod defaults are not applied before execute) — the
+                    // store call defaults to 3, mirror that in the message.
+                    return `Insufficient data for retry budget suggestion (need at least ${args.minSamples ?? 3} failed tasks)`;
                 }
                 return JSON.stringify({
                     suggestedRetries: result.suggestedRetries,

@@ -38,6 +38,23 @@ _CONNECT_RETRY_DELAYS = (0.2, 0.4)
 _SERVER_ERROR_RETRY_DELAY = 0.3
 _TRANSIENT_STATUSES = {502, 503, 504}
 
+# Per-tool response timeouts for /tool dispatch. The 10s default is right for
+# search/CRUD, but some fork tools are LLM-backed or rescore whole scopes:
+# summarize runs LLM digest generation, consolidate/reembed/import re-embed
+# and rescore everything. Values must stay UNDER the gateway's tool-call
+# budget (HERMES_CONCURRENT_TOOL_TIMEOUT_S, default 420s) or the gateway
+# kills the call first.
+_TOOL_TIMEOUTS = {
+    "lorekeeper_summarize": 300.0,
+    "lorekeeper_consolidate": 300.0,
+    "lorekeeper_consolidate_all": 300.0,
+    "lorekeeper_reembed": 300.0,
+    "lorekeeper_import": 300.0,
+    "lorekeeper_expire": 120.0,
+    "lorekeeper_event_cleanup": 120.0,
+    "lorekeeper_export": 120.0,
+}
+
 
 def _ensure_syslog_logger() -> None:
     """Route lorekeeper.client records to syslog the way hermes does.
@@ -319,7 +336,7 @@ class LorekeeperClient:
                 tool_args.get("scope"),
             )
             return self._search_fetch(key, lambda: self._request("POST", "/tool", {"name": name, "toolArgs": tool_args}))
-        result = self._request("POST", "/tool", {"name": name, "toolArgs": tool_args})
+        result = self._request("POST", "/tool", {"name": name, "toolArgs": tool_args}, response_timeout=_TOOL_TIMEOUTS.get(name))
         self._evict_search_cache()
         return result
 

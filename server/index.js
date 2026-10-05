@@ -305,13 +305,49 @@ function getToolRegistry() {
   return toolRegistry;
 }
 
+// The fork's tool.schema is a minimal standard-schema zod whose defs
+// zod-to-json-schema cannot read — synthesize shallow OpenAI-style schemas
+// from def.type / def.entries / def.checks so the model at least gets types
+// and enum values (previously every arg serialized as {}).
+function _fallbackArgSchema(zodSchema) {
+  let cur = zodSchema;
+  for (let i = 0; i < 5 && cur && cur.def; i++) {
+    const def = cur.def;
+    if (def.type === "optional" || def.type === "default" || def.type === "nullable") {
+      cur = def.innerType;
+      continue;
+    }
+    if (def.type === "enum") {
+      const values = Array.isArray(def.options) ? def.options : Object.keys(def.entries ?? {});
+      return { type: "string", enum: values.map(String) };
+    }
+    if (def.type === "string") return { type: "string" };
+    if (def.type === "boolean") return { type: "boolean" };
+    if (def.type === "number") {
+      const isInt = (def.checks ?? []).some((c) => {
+        const cd = c?.def ?? c;
+        return cd?.check === "number_format" && (cd?.format === "safeint" || cd?.format === "int" || cd?.format === "int32" || cd?.format === "int64");
+      });
+      return { type: isInt ? "integer" : "number" };
+    }
+    if (def.type === "array") {
+      return { type: "array", items: _fallbackArgSchema(def.element) ?? {} };
+    }
+    return null; // unknown shape: keep the old {} behavior
+  }
+  return null;
+}
+
 function zodToOpenAISchema(zodSchema) {
-  // zod-to-json-schema handles optional/default/enum/array shapes; the
-  // OpenAI function-calling contract wants a plain JSON schema object.
+  // zod-to-json-schema emits an empty schema (just $schema) for these defs,
+  // which after stripping leaves {} — fall back to the def synthesizer.
   const jsonSchema = zodToJsonSchema(zodSchema, { target: "jsonSchema7" });
-  // Drop $schema/$defs noise; keep the core type/properties.
   delete jsonSchema.$schema;
-  return jsonSchema;
+  const hasContent =
+    jsonSchema.type !== undefined || jsonSchema.enum !== undefined ||
+    jsonSchema.anyOf || jsonSchema.oneOf || jsonSchema.allOf || jsonSchema.properties;
+  if (hasContent) return jsonSchema;
+  return _fallbackArgSchema(zodSchema) ?? jsonSchema;
 }
 
 // Registry + zod schemas are static after boot — compute once, serve cached.

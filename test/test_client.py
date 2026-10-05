@@ -430,6 +430,24 @@ try:
     finally:
         cjson.stop()
 
+    # 15. per-tool timeout table: LLM-backed tools get long budgets, others default
+    ct = LorekeeperClient(HOST, TOKEN, timeout=5.0)
+    captured = {}
+
+    def _fake_request(method, path, payload=None, *, response_timeout=None):
+        captured["tool"] = payload.get("name")
+        captured["response_timeout"] = response_timeout
+        return {"result": "ok"}
+
+    ct._request = _fake_request
+    ct.tool("lorekeeper_summarize", {"scope": "global", "dryRun": True})
+    check("tool-timeout-summarize", captured["tool"] == "lorekeeper_summarize" and captured["response_timeout"] == 300.0,
+          f"summarize -> {captured['response_timeout']}s")
+    ct.tool("lorekeeper_remember", {"text": "x"})
+    check("tool-timeout-default", captured["response_timeout"] is None, f"remember -> default ({captured['response_timeout']})")
+    ct.tool("lorekeeper_search", {"query": "q"})
+    check("tool-timeout-search", captured["response_timeout"] is None, "search -> default")
+
     # 14. retry policy
     # 503 then success -> transparent retry, server saw 2 requests
     sport = _free_port()
