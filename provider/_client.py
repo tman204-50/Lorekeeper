@@ -16,6 +16,7 @@ import os
 import sys
 import threading
 import time
+from concurrent.futures import Future
 from typing import Any, Dict, Optional
 from urllib.parse import urlsplit
 
@@ -84,8 +85,76 @@ class LorekeeperClient:
             )
         except (TypeError, ValueError):
             self._capture_timeout = 120.0
+        # Short-TTL search cache: the model often re-searches what the
+        # prefetch just searched (derived from the same turn text) — an exact
+        # repeat costs a full server search (embedder + LanceDB + scoring).
+        # LOREKEEPER_SEARCH_CACHE_TTL=0 disables. Loosely bounded LRU.
+        try:
+            self._search_cache_ttl = float(os.environ.get("LOREKEEPER_SEARCH_CACHE_TTL") or 60.0)
+        except (TypeError, ValueError):
+            self._search_cache_ttl = 60.0
+        self._search_cache_max = 16
+        self._search_cache: Dict[tuple, tuple] = {}  # key -> (result, monotonic)
+        self._search_inflight: Dict[tuple, Future] = {}  # key -> future (coalesce)
+        self._search_cache_lock = threading.Lock()
         self._conn: Optional[http.client.HTTPConnection] = None
         self._lock = threading.Lock()
+
+    @staticmethod
+    def _normalize_query(query: str) -> str:
+        return " ".join((query or "").split()).lower()
+
+    def _search_cache_get(self, key: tuple):
+        if self._search_cache_ttl <= 0:
+            return None
+        with self._search_cache_lock:
+            entry = self._search_cache.get(key)
+            if entry is None:
+                return None
+            result, cached_at = entry
+            if time.monotonic() - cached_at > self._search_cache_ttl:
+                del self._search_cache[key]
+                return None
+            return result
+
+    def _search_fetch(self, key: tuple, fetch):
+        """Fetch with TTL cache + in-flight coalescing (thread-safe).
+
+        Concurrent identical fetches (the prefetch worker and the model's
+        lorekeeper_search tool call) share one request: losers block on the
+        owner's future instead of issuing a second server search."""
+        hit = self._search_cache_get(key)
+        if hit is not None:
+            logger.debug("search cache hit (%s)", str(key[0]))
+            return hit
+        with self._search_cache_lock:
+            fut = self._search_inflight.get(key)
+            owner = fut is None
+            if owner:
+                fut = Future()
+                self._search_inflight[key] = fut
+        if not owner:
+            return fut.result()
+        try:
+            result = fetch()
+        except Exception as e:
+            with self._search_cache_lock:
+                self._search_inflight.pop(key, None)
+            fut.set_exception(e)
+            raise
+        with self._search_cache_lock:
+            self._search_inflight.pop(key, None)
+            if self._search_cache_ttl > 0:
+                if len(self._search_cache) >= self._search_cache_max:
+                    # dict keeps insertion order: drop the oldest entry
+                    self._search_cache.pop(next(iter(self._search_cache)), None)
+                self._search_cache[key] = (result, time.monotonic())
+        fut.set_result(result)
+        return result
+
+    def _evict_search_cache(self) -> None:
+        with self._search_cache_lock:
+            self._search_cache.clear()
 
     def _new_conn(self) -> http.client.HTTPConnection:
         cls = http.client.HTTPSConnection if self._https else http.client.HTTPConnection
@@ -153,7 +222,8 @@ class LorekeeperClient:
         return self._request("POST", "/init", {})
 
     def search(self, query: str, limit: int = 5, scope: Optional[str] = None) -> dict:
-        return self._request("POST", "/search", {"query": query, "limit": limit, "scope": scope})
+        key = ("search", self._normalize_query(query), limit, scope)
+        return self._search_fetch(key, lambda: self._request("POST", "/search", {"query": query, "limit": limit, "scope": scope}))
 
     def remember(self, content: str, category: Optional[str] = None, importance: Optional[float] = None, scope: Optional[str] = None) -> dict:
         payload: Dict[str, Any] = {"content": content}
@@ -163,10 +233,14 @@ class LorekeeperClient:
             payload["importance"] = importance
         if scope is not None:
             payload["scope"] = scope
-        return self._request("POST", "/remember", payload)
+        result = self._request("POST", "/remember", payload)
+        self._evict_search_cache()
+        return result
 
     def delete(self, memory_id: str, force: bool = False) -> dict:
-        return self._request("POST", "/delete", {"id": memory_id, "force": force})
+        result = self._request("POST", "/delete", {"id": memory_id, "force": force})
+        self._evict_search_cache()
+        return result
 
     def stats(self) -> dict:
         return self._request("POST", "/stats", {})
@@ -176,16 +250,34 @@ class LorekeeperClient:
 
         Uses the extended capture timeout (server LLM extraction is capped at
         90s; a shorter client timeout would abort first and cause a duplicate
-        re-send on the next flush)."""
-        return self._request("POST", "/capture", payload, response_timeout=self._capture_timeout)
+        re-send on the next flush). Success evicts the search cache: freshly
+        stored memories must be searchable immediately."""
+        result = self._request("POST", "/capture", payload, response_timeout=self._capture_timeout)
+        self._evict_search_cache()
+        return result
 
     def tools(self) -> dict:
         """List all registered tool schemas from the service."""
         return self._request("POST", "/tools", {})
 
     def tool(self, name: str, tool_args: dict) -> dict:
-        """Dispatch a single fork tool call to the service."""
-        return self._request("POST", "/tool", {"name": name, "toolArgs": tool_args})
+        """Dispatch a single fork tool call to the service.
+
+        lorekeeper_search participates in the TTL cache (same query/limit ->
+        one server search). Any OTHER lorekeeper_* tool may mutate what a
+        search returns (remember/delete/feedback/citation/scope...) or its
+        result view, so it evicts the cache."""
+        if name == "lorekeeper_search":
+            key = (
+                "tool",
+                self._normalize_query(tool_args.get("query") or ""),
+                tool_args.get("limit") or 5,
+                tool_args.get("scope"),
+            )
+            return self._search_fetch(key, lambda: self._request("POST", "/tool", {"name": name, "toolArgs": tool_args}))
+        result = self._request("POST", "/tool", {"name": name, "toolArgs": tool_args})
+        self._evict_search_cache()
+        return result
 
     def close(self) -> None:
         with self._lock:

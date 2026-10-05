@@ -84,6 +84,57 @@ class _SlowCaptureServer:
         self.httpd.shutdown()
         self.httpd.server_close()
 
+
+class _CountingJSONServer:
+    """Counts /search and /tool calls; instant canned JSON responses.
+
+    /search -> {"results": [...]}, /tool lorekeeper_search -> {"result": "..."},
+    any other /tool -> {"result": "done"} (treated as a mutation by the client)."""
+
+    def __init__(self, port):
+        self.calls = {"search": 0, "tool_search": 0, "tool_other": 0}
+        self.lock = threading.Lock()
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                payload = json.loads(self.rfile.read(length) or b"{}") if length else {}
+                with outer.lock:
+                    if self.path == "/search":
+                        outer.calls["search"] += 1
+                        body = json.dumps({"results": [{"id": "x", "text": "hit"}]}).encode()
+                    elif payload.get("name") == "lorekeeper_search":
+                        outer.calls["tool_search"] += 1
+                        body = json.dumps({"result": "1. [id] cached tool result [80%]"}).encode()
+                    else:
+                        outer.calls["tool_other"] += 1
+                        body = json.dumps({"result": "done"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        self.port = port
+
+    def start(self):
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def stop(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+    def counts(self):
+        with self.lock:
+            return dict(self.calls)
+
 # Force the client's own DEBUG handler (per-request lines) and capture records
 # through a test handler to assert the logging contract.
 os.environ["LOREKEEPER_CLIENT_DEBUG"] = "1"
@@ -267,6 +318,70 @@ try:
         check("default-timeout-still-short", False, "capture succeeded despite 1s timeout")
     except LorekeeperError:
         check("default-timeout-still-short", True, "1s client timeout aborts slow capture (old behavior)")
+
+    # 13. search TTL cache + in-flight coalescing
+    cport = _free_port()
+    cjson = _CountingJSONServer(cport)
+    cjson.start()
+    try:
+        cc = LorekeeperClient(f"http://127.0.0.1:{cport}", TOKEN, timeout=5.0)
+        r1 = cc.search("What was the Crof fix?")
+        r2 = cc.search("  what was the CROF   fix?  ")  # normalizes identically
+        check("search-cache-hit", r1 is r2 and cjson.counts()["search"] == 1, f"2 searches -> {cjson.counts()['search']} server call, same object")
+        cc.search("different query entirely")
+        check("search-cache-miss", cjson.counts()["search"] == 2, "different query fetches")
+
+        t1 = cc.tool("lorekeeper_search", {"query": "tool query", "limit": 5})
+        t2 = cc.tool("lorekeeper_search", {"query": "TOOL QUERY", "limit": 5})
+        check("tool-search-cache-hit", t1 is t2 and cjson.counts()["tool_search"] == 1, f"2 tool searches -> {cjson.counts()['tool_search']} server call")
+        t3 = cc.tool("lorekeeper_search", {"query": "tool query", "limit": 10})
+        check("tool-search-limit-key", cjson.counts()["tool_search"] == 2, "different limit = different key")
+
+        cc.tool("lorekeeper_remember", {"text": "mutation"})  # non-search tool evicts
+        cc.tool("lorekeeper_search", {"query": "tool query", "limit": 5})
+        check("tool-mutation-evicts", cjson.counts()["tool_search"] == 3, "non-search tool invalidated the cache")
+        cc.search("What was the Crof fix?")
+        check("remember-evicts", cjson.counts()["search"] == 3, "remember (tool path) also evicted search-path cache")
+        cc.capture({"sessionID": "t", "text": "more mutation"})
+        cc.search("different query entirely")
+        check("capture-evicts", cjson.counts()["search"] == 4, "capture invalidated the cache")
+
+        # TTL expiry
+        ct = LorekeeperClient(f"http://127.0.0.1:{cport}", TOKEN, timeout=5.0)
+        ct._search_cache_ttl = 0.2
+        ct.search("ttl probe")
+        ct.search("ttl probe")
+        check("ttl-cached", cjson.counts()["search"] == 5, "within TTL -> cached")
+        time.sleep(0.3)
+        ct.search("ttl probe")
+        check("ttl-expiry", cjson.counts()["search"] == 6, "after TTL -> refetched")
+        ct.close()
+
+        # in-flight coalescing: concurrent identical searches share one request
+        cco = LorekeeperClient(f"http://127.0.0.1:{cport}", TOKEN, timeout=5.0)
+        out = []
+
+        def coburst():
+            out.append(cco.search("coalesced query"))
+
+        threads = [threading.Thread(target=coburst) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        before = cjson.counts()["search"]
+        check("coalesce", before == 7 and len(out) == 5, f"5 concurrent -> {before} server call")
+
+        # disabled cache (TTL=0) always fetches
+        c0 = LorekeeperClient(f"http://127.0.0.1:{cport}", TOKEN, timeout=5.0)
+        c0._search_cache_ttl = 0
+        c0.search("uncached")
+        c0.search("uncached")
+        check("ttl-zero-disables", cjson.counts()["search"] == 9, "TTL=0 -> every call fetches")
+        cco.close()
+        c0.close()
+    finally:
+        cjson.stop()
 finally:
     if proc.poll() is None:
         proc.terminate()
