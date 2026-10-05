@@ -100,6 +100,17 @@ try:
     ss = next(e for e in m["timing"] if e["op"] == "store.search")
     # 10 rows: even Fuse was fast here — assert we're in the trigram regime (<10ms)
     check("fuzzy-fast", ss["avgMs"] < 10, f"store.search avg {ss['avgMs']}ms over {len(probes[:4])} warm searches")
+
+    # R2: a put must NOT invalidate the scope cache (incremental patch).
+    # misses should stay put across a remember + search cycle.
+    before = call("/metrics", {})["scopeCache"]
+    call("/remember", {"content": "R2 probe row: incremental cache patch keeps the search cache warm", "category": "test"})
+    call("/search", {"query": "incremental cache patch warm", "limit": 5})
+    after = call("/metrics", {})["scopeCache"]
+    delta = after["misses"] - before["misses"]
+    check("r2-cache-stays-warm", delta == 0, f"cache misses delta {delta} after put+search (0 = patched, 1+ = full rebuild)")
+    hit = call("/search", {"query": "R2 probe row incremental", "limit": 3})["results"]
+    check("r2-new-row-visible", len(hit) > 0 and "R2 probe row" in hit[0]["text"], f"patched row searchable: {hit[0]['text'][:40] if hit else 'none'}")
 finally:
     if proc.poll() is None:
         proc.terminate()

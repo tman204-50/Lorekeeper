@@ -717,7 +717,12 @@ export class MemoryStore {
                 : record.citationChain,
         };
         await table.add([recordWithDefaults]);
-        this.invalidateScope(record.scope);
+        // SCOPE_CACHE_INCREMENTAL (0.2.2): a put used to invalidateScope()
+        // only — the NEXT search then paid a full rebuild (re-read ~2.3k
+        // rows + re-tokenize + IDF + trigram index), a 300-500ms spike right
+        // after every capture. Patch the live cache entry in place instead;
+        // invalidateScope still bumps the version so stale entries rebuild.
+        this.patchScopeCacheForPut(record.scope, recordWithDefaults);
     }
     async putEvent(event) {
         // TIMING_SPANS (1.4.7): telemetry writes fire on every recall/capture;
@@ -2246,6 +2251,35 @@ export class MemoryStore {
     }
     invalidateScope(scope) {
         this.scopeVersions.set(scope, (this.scopeVersions.get(scope) ?? 0) + 1);
+    }
+    // SCOPE_CACHE_INCREMENTAL (0.2.2): see _put. Bumps the version (keeping
+    // the bump semantic every consumer relies on) and, when the live entry is
+    // exactly one version behind, patches it in place so the next search is
+    // a warm cache hit instead of a full rebuild.
+    patchScopeCacheForPut(scope, recordWithDefaults) {
+        this.invalidateScope(scope);
+        const version = this.scopeVersions.get(scope) ?? 0;
+        const entry = this.scopeCache.get(scope);
+        if (!entry || entry.version !== version - 1) {
+            return; // no fresh entry to patch → full rebuild on next read
+        }
+        const normalized = normalizeRow(recordWithDefaults);
+        if (!normalized) {
+            return;
+        }
+        entry.records.push(normalized);
+        entry.tokenized.push(tokenize(normalized.text));
+        if (Array.isArray(normalized.vector) && normalized.vector.length > 0) {
+            entry.norms.set(normalized.id, vecNorm(normalized.vector));
+        }
+        entry.idf = computeIdf(entry.tokenized);
+        // the trigram index shares the records array reference — append its
+        // postings for the new row only
+        if (entry.fuse && typeof entry.fuse.add === "function") {
+            entry.fuse.add(normalized);
+        }
+        entry.version = version;
+        entry.loadedAt = Date.now();
     }
     async getCachedScopes(scopes) {
         // TIMING_SPANS (1.4.7): the scope cache decides whether a search pays a
@@ -3835,6 +3869,27 @@ class TrigramIndex {
         }
         results.sort((a, b) => b.sim - a.sim);
         return results.slice(0, limit).map(({ idx, sim }) => ({ item: this.items[idx], score: 1 - sim }));
+    }
+
+    // SCOPE_CACHE_INCREMENTAL (0.2.2): the cache entry's records array is the
+    // same reference as this.items, so a pushed record may already be here —
+    // only extend postings for its index.
+    add(record) {
+        const idx = this.items.indexOf(record);
+        if (idx === -1) {
+            this.items.push(record);
+            return this.add(record);
+        }
+        for (const gram of textTrigrams(normalizeFuzzyText(record?.text))) {
+            let list = this.postings.get(gram);
+            if (!list) {
+                list = [];
+                this.postings.set(gram, list);
+            }
+            if (list.length === 0 || list[list.length - 1] !== idx) {
+                list.push(idx);
+            }
+        }
     }
 }
 
