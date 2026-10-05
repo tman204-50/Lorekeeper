@@ -3,6 +3,10 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/tman204-50/Lorekeeper/main/install.sh | bash
 #
+# With --plugin-only: skip the full install and just refresh the Hermes plugin
+# files from this checkout + restart the service + verify versions. That is
+# the fast path while iterating on the code.
+#
 # Installs:
 #   1. Node service  -> ~/.local/share/lorekeeper (git clone + npm install)
 #   2. systemd unit  -> lorekeeper.service (user or system)
@@ -13,6 +17,14 @@
 # Optional:     ollama with nomic-embed-text (falls back to openai embedder).
 
 set -euo pipefail
+
+PLUGIN_ONLY=0
+for arg in "$@"; do
+  case "$arg" in
+    --plugin-only|-u) PLUGIN_ONLY=1 ;;
+    *) ;;
+  esac
+done
 
 # --- resolve HERMES_HOME -----------------------------------------------------
 if [ -n "${HERMES_HOME:-}" ]; then
@@ -35,6 +47,56 @@ SERVICE_NAME="lorekeeper"
 log()  { printf '\033[1;32m[lorekeeper]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[lorekeeper]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[lorekeeper]\033[0m ERROR: %s\n' "$*" >&2; exit 1; }
+
+# --- version verification ------------------------------------------------------
+# Prints versions; in verify mode, fails when plugin and service disagree
+# (mismatch = the box is running stale code — usually a missed file copy).
+verify_versions() {
+  local mode="$1"
+  local py_version svc_version health_version
+  py_version=$(grep -oP '__version__\s*=\s*"\K[^"]+' "$SCRIPT_DIR/provider/_version.py" 2>/dev/null || echo "?")
+  svc_version=$(grep -oP 'SERVICE_VERSION = "\K[^"]+' "$SCRIPT_DIR/server/index.js" 2>/dev/null || echo "?")
+  health_version=$(curl -fsS "http://127.0.0.1:$PORT/health" 2>/dev/null | grep -oP '"version":\s*"\K[^"]+' || echo "?")
+  if [ "$mode" = "verify" ]; then
+    local installed_version
+    installed_version=$(grep -oP '__version__\s*=\s*"\K[^"]+' "$HERMES_HOME/plugins/lorekeeper/_version.py" 2>/dev/null || echo "missing")
+    log "Versions: provider=$py_version service=$svc_version installed-plugin=$installed_version /health=$health_version"
+    if [ "$installed_version" != "$py_version" ]; then
+      die "installed plugin is stale ($installed_version != $py_version)"
+    fi
+    if [ "$health_version" != "$svc_version" ]; then
+      die "running service is stale (/health $health_version != $svc_version) — restart lorekeeper"
+    fi
+    log "Version check passed."
+  else
+    log "Versions: provider=$py_version service=$svc_version"
+  fi
+}
+
+# Resolve this checkout (works when piped from curl or run from the repo).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+
+if [ "$PLUGIN_ONLY" -eq 1 ]; then
+  log "Plugin-only update from $SCRIPT_DIR"
+  verify_versions print
+  PLUGIN_DIR="$HERMES_HOME/plugins/lorekeeper"
+  mkdir -p "$PLUGIN_DIR"
+  cp "$SCRIPT_DIR"/provider/*.py "$PLUGIN_DIR/"
+  cp "$SCRIPT_DIR/provider/plugin.yaml" "$PLUGIN_DIR/"
+  # Restart the service so server-side changes (server/index.js) go live.
+  if systemctl is-active --quiet lorekeeper 2>/dev/null; then
+    systemctl restart lorekeeper
+    sleep 2
+  elif systemctl --user is-active --quiet lorekeeper 2>/dev/null; then
+    systemctl --user restart lorekeeper
+    sleep 2
+  else
+    warn "lorekeeper service not found via systemd — start it manually"
+  fi
+  verify_versions verify
+  log "Done. Restart the gateway (systemctl --user restart hermes-gateway) to load the refreshed provider."
+  exit 0
+fi
 
 # --- prereqs -----------------------------------------------------------------
 command -v node >/dev/null 2>&1 || die "node not found (need >= 22)"
@@ -158,6 +220,7 @@ EOF
 fi
 
 log ""
+verify_versions verify
 log "Done. Lorekeeper is installed and active."
 log "  Service : http://127.0.0.1:$PORT (token: $TOKEN_FILE)"
 log "  Plugin  : $PLUGIN_DIR"
