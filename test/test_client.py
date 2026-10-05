@@ -501,6 +501,19 @@ srv.close();
     if row.get("id"):
         client.delete(row["id"], force=True)
 
+    # 18. /metrics: aggregated spans (http.* spans recorded), cache stats, reset
+    client.metrics(reset=True)  # clean slate
+    client.search("metrics probe query")
+    m = client.metrics()
+    ops = {e["op"]: e for e in m.get("timing", [])}
+    check("metrics-http-span", "http.search" in ops, f"timing ops: {sorted(ops)[:6]}")
+    check("metrics-store-span", any(op in ops for op in ("store.search", "embedder.embed")), f"vendor spans present: {sorted(ops)[:8]}")
+    check("metrics-cache-stats", isinstance(m.get("scopeCache"), dict) or m.get("scopeCache") is None, f"scopeCache={m.get('scopeCache')}")
+    m2 = client.metrics(reset=True)
+    m3 = client.metrics()
+    check("metrics-reset", all(e["count"] <= 1 for e in m3.get("timing", []) if e["op"] == "http.metrics"),
+          "reset cleared spans (http.metrics restarted at 1)")
+
     # 14. retry policy
     # 503 then success -> transparent retry, server saw 2 requests
     sport = _free_port()

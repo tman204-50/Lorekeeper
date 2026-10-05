@@ -306,6 +306,10 @@ class LorekeeperClient:
     def stats(self) -> dict:
         return self._request("POST", "/stats", {})
 
+    def metrics(self, reset: bool = False) -> dict:
+        """Aggregated timing spans + scope-cache stats (server-side, ops-facing)."""
+        return self._request("POST", "/metrics", {"reset": True} if reset else {})
+
     def capture(self, payload: dict) -> dict:
         """Run heuristics/LLM auto-capture on buffered turn text.
 

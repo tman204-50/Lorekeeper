@@ -30,6 +30,7 @@ import { createMemoryTools } from "../vendor/dist/tools/memory.js";
 import { createFeedbackTools } from "../vendor/dist/tools/feedback.js";
 import { createEpisodicTools } from "../vendor/dist/tools/episodic.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { getTimingStats, resetTimingStats, startSpan } from "../vendor/dist/timing.js";
 import { LLMSessionClient } from "./llm_shim.js";
 
 const SCHEMA_VERSION = 1;
@@ -639,6 +640,23 @@ const handlers = {
       text: result.candidate.text,
     };
   },
+  async metrics(args) {
+    // Aggregated vendor timing spans (store.search, embedder.embed, llm.prompt,
+    // compaction, http.* — spans always record into a fixed-size map) plus
+    // scope-cache stats and process info. POST {"reset": true} clears spans.
+    if (args?.reset) resetTimingStats();
+    const mem = process.memoryUsage();
+    return {
+      version: SERVICE_VERSION,
+      timing: getTimingStats(),
+      scopeCache: state.store?.cacheStats ?? null,
+      process: {
+        rssKib: Math.round(mem.rss / 1024),
+        heapUsedKib: Math.round(mem.heapUsed / 1024),
+        uptimeS: Math.round(process.uptime()),
+      },
+    };
+  },
   async tools() {
     return { tools: toolSchemas() };
   },
@@ -712,7 +730,12 @@ const server = createServer((req, res) => {
   }
   readBody(req)
     .then((body) => JSON.parse(body || "{}"))
-    .then((args) => handler(args))
+    .then((args) => {
+      // HTTP-layer span: endpoint latency lands in /metrics alongside the
+      // vendor's store/embedder/llm spans (nesting is by design).
+      const stop = startSpan(`http.${path.slice(1)}`);
+      return Promise.resolve(handler(args)).finally(stop);
+    })
     .then((result) => sendJson(res, 200, result))
     .catch((e) => sendJson(res, 500, { error: e.message }));
 });
