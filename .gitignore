@@ -1,4 +1,5 @@
 node_modules/
 *.log
 .DS_Store
-test/tmp/__pycache__/
+test/tmp/
+__pycache__/
