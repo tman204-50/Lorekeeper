@@ -1,6 +1,6 @@
 import { mkdir, open, readFile, readdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import Fuse from "fuse.js";
+// fuse.js import removed (0.2.2): replaced by the trigram index below.
 import { validateEpisodicRecord, validateEpisodicRecordArray } from "./types.js";
 import { tokenize, parseJsonObject } from "./utils.js";
 import { log, logFileOnly } from "./logger.js";
@@ -3771,17 +3771,75 @@ function buildRankMap(items, scoreOf) {
     }
     return ranks;
 }
-// FUZZY_CHANNEL (1.4.2): fuse.js index over memory text. ignoreLocation
-// keeps substring matches relevant, ignoreDiacritics tolerates accents, and
-// threshold (default 0.5) drops results whose match score is too weak.
+// FUZZY_CHANNEL (0.2.2): Fuse.js was 98% of warm search latency (measured
+// 425.8ms avg vs 8.8ms with the channel off over 2.3k records — full bitap
+// per query across every token position of every document). Replaced with a
+// trigram index: per-record trigram sets built once per scope-cache version,
+// postings lists per trigram; a search intersects the query's trigrams and
+// scores by query-coverage. Contract-compatible with the old Fuse results
+// shape ({item, score}, score = distance 0..1, lower = better).
+
+function normalizeFuzzyText(text) {
+    // matches the old Fuse options: ignoreDiacritics + case-insensitive
+    return String(text ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function textTrigrams(norm) {
+    // pad so word-boundary trigrams form; a Set dedupes within the text
+    const padded = ` ${norm} `;
+    const set = new Set();
+    for (let i = 0; i < padded.length - 2; i++) {
+        set.add(padded.slice(i, i + 3));
+    }
+    return set;
+}
+
+class TrigramIndex {
+    constructor(records, threshold = 0.5) {
+        this.items = records;
+        this.threshold = threshold;
+        // trigram -> array of record indices (append-once per record)
+        this.postings = new Map();
+        for (let i = 0; i < records.length; i++) {
+            for (const gram of textTrigrams(normalizeFuzzyText(records[i]?.text))) {
+                let list = this.postings.get(gram);
+                if (!list) {
+                    list = [];
+                    this.postings.set(gram, list);
+                }
+                if (list.length === 0 || list[list.length - 1] !== i) {
+                    list.push(i);
+                }
+            }
+        }
+    }
+
+    search(query, { limit = 200 } = {}) {
+        const grams = [...textTrigrams(normalizeFuzzyText(query))];
+        if (grams.length === 0) return [];
+        const counts = new Map();
+        for (const gram of grams) {
+            const list = this.postings.get(gram);
+            if (!list) continue;
+            for (const idx of list) {
+                counts.set(idx, (counts.get(idx) ?? 0) + 1);
+            }
+        }
+        // Fuse accepted matches up to `threshold` fuzziness; the trigram
+        // equivalent is similarity >= 1 - threshold (0.5 by default).
+        const minSim = 1 - this.threshold;
+        const results = [];
+        for (const [idx, hits] of counts) {
+            const sim = hits / grams.length;
+            if (sim >= minSim) results.push({ idx, sim });
+        }
+        results.sort((a, b) => b.sim - a.sim);
+        return results.slice(0, limit).map(({ idx, sim }) => ({ item: this.items[idx], score: 1 - sim }));
+    }
+}
+
 function buildFuseIndex(records, threshold = 0.5) {
-    return new Fuse(records, {
-        keys: ["text"],
-        includeScore: true,
-        ignoreLocation: true,
-        ignoreDiacritics: true,
-        threshold,
-    });
+    return new TrigramIndex(records, threshold);
 }
 function normalizeChannelWeights(vectorWeight, bm25Weight, fuzzyWeight = 0) {
     const sum = vectorWeight + bm25Weight + fuzzyWeight;
