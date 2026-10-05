@@ -1021,18 +1021,35 @@ export class MemoryStore {
     async pruneScope(scope, maxEntries) {
         // TIMING_SPANS (1.4.7): retention prune scans up to 100k rows + batch
         // delete; worth watching alongside optimize on the write path.
+        // spanExtra.source reports cache-hit vs db-fallback (PRUNE_CACHE_REUSE).
+        const spanExtra = {};
         const stop = startSpan("store.pruneScope");
         try {
-            return await this._pruneScope(scope, maxEntries);
+            return await this._pruneScope(scope, maxEntries, spanExtra);
         }
         finally {
-            stop();
+            stop(spanExtra.source !== undefined ? { source: spanExtra.source } : undefined);
         }
     }
-    async _pruneScope(scope, maxEntries) {
-        const rows = await this.list(scope, SCAN_LIMIT);
-        if (rows.length === SCAN_LIMIT) {
-            log("warn", `[store] pruneScope scanned up to the ${SCAN_LIMIT}-row cap for scope=${scope}; entries older than the newest ${SCAN_LIMIT} rows are not candidates for pruning`);
+    async _pruneScope(scope, maxEntries, spanExtra = {}) {
+        // PRUNE_CACHE_REUSE (0.2.2): pruneScope runs after EVERY stored
+        // capture and used to pay a fresh 100k-cap read (~259ms @ 2.3k rows)
+        // even though the scope cache — just patched by that same put —
+        // already holds identical rows. Read from the live cache entry when
+        // fresh (version matches); fall back to the DB scan otherwise.
+        let rows;
+        const entry = this.scopeCache.get(scope);
+        const currentVersion = this.scopeVersions.get(scope) ?? 0;
+        if (entry && entry.version === currentVersion && Array.isArray(entry.records)) {
+            rows = entry.records.slice();
+            spanExtra.source = "cache";
+        }
+        else {
+            rows = await this.list(scope, SCAN_LIMIT);
+            spanExtra.source = "db";
+            if (rows.length === SCAN_LIMIT) {
+                log("warn", `[store] pruneScope scanned up to the ${SCAN_LIMIT}-row cap for scope=${scope}; entries older than the newest ${SCAN_LIMIT} rows are not candidates for pruning`);
+            }
         }
         if (rows.length <= maxEntries)
             return 0;

@@ -111,6 +111,17 @@ try:
     check("r2-cache-stays-warm", delta == 0, f"cache misses delta {delta} after put+search (0 = patched, 1+ = full rebuild)")
     hit = call("/search", {"query": "R2 probe row incremental", "limit": 3})["results"]
     check("r2-new-row-visible", len(hit) > 0 and "R2 probe row" in hit[0]["text"], f"patched row searchable: {hit[0]['text'][:40] if hit else 'none'}")
+
+    # R3: pruneScope (runs after every stored capture) must read from the
+    # scope cache, not a fresh DB scan. The prune span reports its source.
+    cap = call("/capture", {"sessionID": "r3-probe",
+              "text": "We decided that the prune scope check must reuse the warm cache for its row scan, because paying a fresh database read after every stored capture is wasteful. This matters for systemd and lancedb services."})
+    assert cap.get("stored"), f"capture did not store (cannot exercise pruneScope): {cap}"
+    m = call("/metrics", {})
+    prune = next((e for e in m["timing"] if e["op"] == "store.pruneScope"), None)
+    check("r3-prune-from-cache", prune is not None and prune.get("lastExtra", {}).get("source") == "cache",
+          f"prune span: {'missing' if prune is None else prune.get('lastExtra')}")
+    check("r3-prune-fast", prune is not None and prune["avgMs"] < 10, f"pruneScope avg {prune['avgMs'] if prune else '?'}ms")
 finally:
     if proc.poll() is None:
         proc.terminate()
