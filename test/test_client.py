@@ -17,11 +17,13 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERMES_CORE = "/usr/local/lib/hermes-agent"
 LOREKEEPER = "/root/.hermes/workspace/Lorekeeper"
@@ -33,6 +35,54 @@ sys.path.insert(0, LOREKEEPER)
 import logging
 
 from provider._client import LorekeeperClient, LorekeeperError
+
+
+def _free_port():
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+class _SlowCaptureServer:
+    """HTTP server where /capture takes 2s to answer; everything else is instant."""
+
+    def __init__(self, port):
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"  # keep-alive, like the real service
+
+            def do_POST(self):
+                # Drain the request body so keep-alive stays in sync.
+                length = int(self.headers.get("Content-Length") or 0)
+                if length:
+                    self.rfile.read(length)
+                if self.path == "/capture":
+                    time.sleep(2.0)
+                body = b'{"ok": true}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                self.do_POST()
+
+            def log_message(self, *a):
+                pass
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        self.port = port
+
+    def start(self):
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def stop(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
 
 # Force the client's own DEBUG handler (per-request lines) and capture records
 # through a test handler to assert the logging contract.
@@ -188,6 +238,35 @@ try:
     # 10. secrets never logged (token must not appear anywhere)
     leaked = [m for m in msgs if TOKEN in m or "Bearer" in m]
     check("no-token-leak", not leaked, f"{len(leaked)} lines contain token/auth header")
+
+    # 11. per-endpoint capture timeout (slow /capture, fast everything else)
+    slow_port = _free_port()
+    slow = _SlowCaptureServer(slow_port)
+    slow.start()
+    try:
+        cslow = LorekeeperClient(f"http://127.0.0.1:{slow_port}", TOKEN, timeout=1.0, capture_timeout=3.0)
+        # fast endpoint succeeds under the default 1s timeout
+        cslow.health()
+        # /capture sleeps 2s: exceeds the 1s default but fits capture_timeout
+        cslow.capture({"sessionID": "t", "text": "slow extraction"})
+        check("capture-timeout-override", True, "capture (2s) survived 1s default via capture_timeout=3")
+        # socket timeout restored to the default afterwards
+        restored = cslow._conn.sock.gettimeout() == 1.0
+        check("timeout-restored", restored, f"sock timeout now {cslow._conn.sock.gettimeout()}")
+        # a second slow capture on the REUSED connection still overrides
+        cslow.capture({"sessionID": "t", "text": "slow again"})
+        check("capture-reused-conn", True, "second capture on reused conn, override still applied")
+        cslow.close()
+    finally:
+        slow.stop()
+
+    # 12. capture without override still fails on slow extraction (guards the default)
+    cdef = LorekeeperClient(f"http://127.0.0.1:{slow_port}", TOKEN, timeout=1.0)
+    try:
+        cdef.capture({"sessionID": "t", "text": "will time out"})
+        check("default-timeout-still-short", False, "capture succeeded despite 1s timeout")
+    except LorekeeperError:
+        check("default-timeout-still-short", True, "1s client timeout aborts slow capture (old behavior)")
 finally:
     if proc.poll() is None:
         proc.terminate()

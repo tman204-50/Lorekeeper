@@ -66,7 +66,7 @@ class LorekeeperError(RuntimeError):
 class LorekeeperClient:
     """Bearer-authenticated JSON client for the loopback Lorekeeper service."""
 
-    def __init__(self, host: str, token: str, timeout: float = 10.0):
+    def __init__(self, host: str, token: str, timeout: float = 10.0, capture_timeout: Optional[float] = None):
         self._base = host.rstrip("/")
         parts = urlsplit(self._base)
         self._node = parts.hostname or "127.0.0.1"
@@ -74,6 +74,16 @@ class LorekeeperClient:
         self._https = parts.scheme == "https"
         self._token = token
         self._timeout = timeout
+        # /capture runs server-side LLM extraction with a 90s hard cap; a
+        # 10s client timeout aborts first, the provider retains the buffer,
+        # and the next flush re-sends it (duplicate LLM extraction). The
+        # capture response timeout must sit ABOVE the server's cap.
+        try:
+            self._capture_timeout = float(
+                capture_timeout or os.environ.get("LOREKEEPER_CAPTURE_TIMEOUT") or 120.0
+            )
+        except (TypeError, ValueError):
+            self._capture_timeout = 120.0
         self._conn: Optional[http.client.HTTPConnection] = None
         self._lock = threading.Lock()
 
@@ -89,7 +99,7 @@ class LorekeeperClient:
                 pass
             self._conn = None
 
-    def _request(self, method: str, path: str, payload: Optional[dict] = None) -> dict:
+    def _request(self, method: str, path: str, payload: Optional[dict] = None, *, response_timeout: Optional[float] = None) -> dict:
         _ensure_syslog_logger()
         body = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
         headers = {"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"}
@@ -102,8 +112,16 @@ class LorekeeperClient:
                     if self._conn is None:
                         self._conn = self._new_conn()
                     self._conn.request(method, path, body=body, headers=headers)
+                    # Per-request response timeout: capture must outwait the
+                    # server's LLM extraction cap without slowing anything
+                    # else. The connection is lock-serialized, so restore the
+                    # default immediately after this response.
+                    if response_timeout is not None and self._conn.sock is not None:
+                        self._conn.sock.settimeout(response_timeout)
                     resp = self._conn.getresponse()
                     raw = resp.read()
+                    if self._conn.sock is not None and response_timeout is not None:
+                        self._conn.sock.settimeout(self._timeout)
                     logger.debug(
                         "%s %s -> %s (%.0f ms, conn=%s)",
                         method, path, resp.status, (time.monotonic() - started) * 1000,
@@ -118,8 +136,6 @@ class LorekeeperClient:
                 except LorekeeperError:
                     raise
                 except (http.client.HTTPException, OSError) as e:
-                    # Stale keep-alive (server closed the idle connection) or a
-                    # dropped socket: drop the connection; retry once, then fail.
                     self._close_conn()
                     transport_err = e
                     if attempt:
@@ -156,8 +172,12 @@ class LorekeeperClient:
         return self._request("POST", "/stats", {})
 
     def capture(self, payload: dict) -> dict:
-        """Run heuristics auto-capture on buffered turn text."""
-        return self._request("POST", "/capture", payload)
+        """Run heuristics/LLM auto-capture on buffered turn text.
+
+        Uses the extended capture timeout (server LLM extraction is capped at
+        90s; a shorter client timeout would abort first and cause a duplicate
+        re-send on the next flush)."""
+        return self._request("POST", "/capture", payload, response_timeout=self._capture_timeout)
 
     def tools(self) -> dict:
         """List all registered tool schemas from the service."""
