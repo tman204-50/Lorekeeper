@@ -255,6 +255,13 @@ try:
         ok_all = ok_all and len(resp.get("tools", [])) == 34
     check("repeated-requests", ok_all, "5x /tools, 34 schemas each")
 
+    # 1b. version handshake: /health carries the version; client logged its own
+    h = client.health()
+    check("health-version", isinstance(h.get("version"), str) and h["version"].count(".") == 2, f"service version: {h.get('version')}")
+    from provider._version import __version__ as _v
+    check("client-version-logged", any(f"lorekeeper.client v{_v}" in m for m in _Capture.messages()),
+          f"client logged v{_v}")
+
     # 2. connection is actually persistent
     check("connection-persistent", client._conn is not None, "HTTPConnection kept open after requests")
 

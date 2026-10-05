@@ -33,6 +33,10 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { LLMSessionClient } from "./llm_shim.js";
 
 const SCHEMA_VERSION = 1;
+// Bump together with provider/_version.py __version__ and provider/plugin.yaml
+// "version" — logged at boot and served from /health so we can track which
+// code is actually loaded.
+const SERVICE_VERSION = "0.2.0";
 
 const PORT = Number(process.env.LOREKEEPER_PORT ?? 18777);
 const HOST = process.env.LOREKEEPER_HOST ?? "127.0.0.1";
@@ -348,7 +352,7 @@ const handlers = {
   async health() {
     return {
       ok: true,
-      version: "0.1.0",
+      version: SERVICE_VERSION,
       initialized: state.initialized,
       dbPath: state.config?.dbPath ?? DB_PATH,
       embedder: state.config ? `${state.config.embedding.provider}/${state.config.embedding.model}` : "not-initialized",
@@ -677,7 +681,7 @@ if (!TOKEN) {
 }
 
 server.listen(PORT, HOST, () => {
-  log("info", `Lorekeeper service listening on http://${HOST}:${PORT}`);
+  log("info", `Lorekeeper service v${SERVICE_VERSION} listening on http://${HOST}:${PORT}`);
 });
 
 process.once("exit", () => {

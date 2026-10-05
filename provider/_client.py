@@ -20,6 +20,8 @@ from concurrent.futures import Future
 from typing import Any, Dict, Optional
 from urllib.parse import urlsplit
 
+from ._version import __version__
+
 logger = logging.getLogger("lorekeeper.client")
 
 _syslog_ready = False
@@ -53,6 +55,7 @@ def _ensure_syslog_logger() -> None:
     if _syslog_ready:
         return
     _syslog_ready = True
+    logger.info("lorekeeper.client v%s (first request)", __version__)
     if os.environ.get("LOREKEEPER_CLIENT_DEBUG"):
         handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(logging.Formatter("lorekeeper-client: %(levelname)s %(message)s"))

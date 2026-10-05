@@ -28,6 +28,7 @@ from tools.registry import tool_error
 
 from ._client import LorekeeperError
 from ._shared import get_client, get_tool_schemas
+from ._version import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -175,8 +176,11 @@ class LorekeeperMemoryProvider(MemoryProvider):
             # one keep-alive connection + one /tools fetch per build.
             self._client = get_client()
             # Best-effort health ping; failures surface via tools, not startup.
+            # The ping doubles as the version handshake: provider version +
+            # the service's own version, so the log shows which code is live.
             with suppress(Exception):
-                self._client.health()
+                service = (self._client.health() or {}).get("version", "unknown")
+                logger.info("Lorekeeper provider v%s ready (service v%s at %s)", __version__, service, self._host)
 
     def shutdown(self) -> None:
         # The client is the shared process-lifetime singleton (the plugin
