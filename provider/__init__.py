@@ -25,7 +25,8 @@ from agent.memory_provider import MemoryProvider
 from agent.secret_scope import get_secret
 from tools.registry import tool_error
 
-from ._client import LorekeeperClient, LorekeeperError
+from ._client import LorekeeperError
+from ._shared import get_client, get_tool_schemas
 
 logger = logging.getLogger(__name__)
 
@@ -131,18 +132,20 @@ class LorekeeperMemoryProvider(MemoryProvider):
         self._channel = kwargs.get("platform") or "cli"
         self._current_session = session_id or ""
         if self._host and self._token:
-            self._client = LorekeeperClient(self._host, self._token)
+            # Shared singleton (same instance the plugin toolset uses) —
+            # one keep-alive connection + one /tools fetch per build.
+            self._client = get_client()
             # Best-effort health ping; failures surface via tools, not startup.
             with suppress(Exception):
                 self._client.health()
 
     def shutdown(self) -> None:
+        # The client is the shared process-lifetime singleton (the plugin
+        # toolset holds it too) — drop the reference, don't close the
+        # connection; closing would just force a transparent reconnect.
         with suppress(Exception):
             self._executor.shutdown(wait=False)
-        with suppress(Exception):
-            if self._client:
-                self._client.close()
-                self._client = None
+        self._client = None
 
     def system_prompt_block(self) -> str:
         mode = "active" if self._client else "unavailable (service not reachable)"
@@ -288,39 +291,31 @@ class LorekeeperMemoryProvider(MemoryProvider):
     # -- tools ---------------------------------------------------------------
 
     def _ensure_client(self) -> None:
-        """Build the client from config/token without session kwargs.
+        """Resolve the shared client (lorekeeper.json/token) without session kwargs.
 
         MemoryManager.add_provider() calls get_tool_schemas() BEFORE
         initialize() has run (initialize is what normally builds the
-        client), so get_tool_schemas() must be able to build it lazily —
+        client), so get_tool_schemas() must be able to resolve it lazily —
         otherwise the provider registers 0 tools, the dispatch routing
         table stays empty, and every lorekeeper_* call falls through to
-        the registry as "Unknown tool". initialize() re-reads the same
-        config and re-creates the client, so this is safe to call early.
+        the registry as "Unknown tool". Uses the same sig-cached singleton
+        as the plugin toolset (no duplicate config reads or connections).
         """
         if self._client is not None:
             return
-        from hermes_constants import get_hermes_home
-
-        home = get_hermes_home()
-        cfg = _read_config(home)
-        host = (cfg.get("host") or os.environ.get("LOREKEEPER_HOST") or _DEFAULT_HOST).rstrip("/")
-        token = (cfg.get("token") or _read_token(home)) or ""
-        if host and token:
-            self._client = LorekeeperClient(host, token)
+        self._client = get_client()
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        """Fetch the full tool surface from the service (34 fork tools)."""
+        """Fetch the full tool surface from the service (34 fork tools).
+
+        Routed through the shared schema cache so the plugin toolset's
+        registration reuses the same fetch instead of a second /tools call.
+        """
         if self._client is None:
             self._ensure_client()
         if self._client is None:
             return []
-        try:
-            resp = self._client.tools()
-            return resp.get("tools", [])
-        except Exception as e:
-            logger.debug("Lorekeeper tool schema fetch failed: %s", e)
-            return []
+        return get_tool_schemas(self._client)
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
         """Generic dispatch: every lorekeeper_* tool runs on the service."""
