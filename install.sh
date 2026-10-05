@@ -126,10 +126,9 @@ fi
 PLUGIN_DIR="$HERMES_HOME/plugins/lorekeeper"
 log "Installing Hermes provider -> $PLUGIN_DIR"
 mkdir -p "$PLUGIN_DIR"
-cp "$INSTALL_DIR/provider/__init__.py" "$PLUGIN_DIR/"
-cp "$INSTALL_DIR/provider/_client.py" "$PLUGIN_DIR/"
+# Copy every module: a fixed-name list silently dropped new files (e.g. _shared.py)
+cp "$INSTALL_DIR"/provider/*.py "$PLUGIN_DIR/"
 cp "$INSTALL_DIR/provider/plugin.yaml" "$PLUGIN_DIR/"
-cp "$INSTALL_DIR/provider/tools.py" "$PLUGIN_DIR/"
 
 # --- 5b. install usage skill -------------------------------------------------
 SKILL_DIR="$HERMES_HOME/skills/lorekeeper-usage"
