@@ -965,17 +965,23 @@ ${explanations.join("\n")}`;
             },
         }),
         memory_consolidate: tool({
-            description: "Scope-internally merge near-duplicate memories. Use to clean up accumulated duplicates.",
+            description: "Scope-internally merge near-duplicate memories. Use to clean up accumulated duplicates. Pass dryRun=true for a fast read-only preview (no confirm needed, nothing is written).",
             args: {
                 scope: tool.schema.string().optional(),
                 confirm: tool.schema.boolean().default(false),
+                dryRun: tool.schema.boolean().optional().default(false),
             },
             execute: async (args, context) => {
                 await state.ensureInitialized();
                 if (!state.initialized)
                     return unavailableMessage(state.config.embedding.provider);
-                if (!args.confirm) {
-                    return "Rejected: memory_consolidate requires confirm=true.";
+                // CONSOLIDATE_DRYRUN (0.2.4): the zod schema used to strip an
+                // unknown dryRun arg and the call ran a real merge. dryRun is
+                // now a first-class arg and a read-only preview needs no
+                // confirm; a real run still requires confirm=true.
+                const dryRun = args.dryRun === true;
+                if (!args.confirm && !dryRun) {
+                    return "Rejected: memory_consolidate requires confirm=true (or dryRun=true for a read-only preview).";
                 }
                 const targetScope = resolveScope(args.scope, context.directory || context.worktree);
                 if (state.consolidationInProgress.get(targetScope)) {
@@ -983,8 +989,8 @@ ${explanations.join("\n")}`;
                 }
                 state.consolidationInProgress.set(targetScope, true);
                 try {
-                    const result = await state.store.consolidateDuplicates(targetScope, state.config.dedup.consolidateThreshold, state.config.dedup.candidateLimit);
-                    return JSON.stringify({ scope: targetScope, ...result }, null, 2);
+                    const result = await state.store.consolidateDuplicates(targetScope, state.config.dedup.consolidateThreshold, state.config.dedup.candidateLimit, { dryRun });
+                    return JSON.stringify({ scope: targetScope, dryRun: dryRun ? true : undefined, ...result }, null, 2);
                 }
                 finally {
                     state.consolidationInProgress.delete(targetScope);
@@ -992,16 +998,18 @@ ${explanations.join("\n")}`;
             },
         }),
         memory_consolidate_all: tool({
-            description: "Consolidate duplicates across global scope and current project scope. Used by external cron jobs for daily cleanup.",
+            description: "Consolidate duplicates across global scope and current project scope. Used by external cron jobs for daily cleanup. Pass dryRun=true for a fast read-only preview (no confirm needed, nothing is written).",
             args: {
                 confirm: tool.schema.boolean().default(false),
+                dryRun: tool.schema.boolean().optional().default(false),
             },
             execute: async (args, context) => {
                 await state.ensureInitialized();
                 if (!state.initialized)
                     return unavailableMessage(state.config.embedding.provider);
-                if (!args.confirm) {
-                    return "Rejected: memory_consolidate_all requires confirm=true.";
+                const dryRun = args.dryRun === true;
+                if (!args.confirm && !dryRun) {
+                    return "Rejected: memory_consolidate_all requires confirm=true (or dryRun=true for a read-only preview).";
                 }
                 const projectScope = deriveProjectScope(context.directory || context.worktree);
                 const globalInProgress = state.consolidationInProgress.get("global");
@@ -1016,11 +1024,11 @@ ${explanations.join("\n")}`;
                 state.consolidationInProgress.set("global", true);
                 state.consolidationInProgress.set(projectScope, true);
                 try {
-                    const globalResult = await state.store.consolidateDuplicates("global", state.config.dedup.consolidateThreshold, state.config.dedup.candidateLimit);
-                    const projectResult = await state.store.consolidateDuplicates(projectScope, state.config.dedup.consolidateThreshold, state.config.dedup.candidateLimit);
+                    const globalResult = await state.store.consolidateDuplicates("global", state.config.dedup.consolidateThreshold, state.config.dedup.candidateLimit, { dryRun });
+                    const projectResult = await state.store.consolidateDuplicates(projectScope, state.config.dedup.consolidateThreshold, state.config.dedup.candidateLimit, { dryRun });
                     return JSON.stringify({
-                        global: { scope: "global", ...globalResult },
-                        project: { scope: projectScope, ...projectResult },
+                        global: { scope: "global", dryRun: dryRun ? true : undefined, ...globalResult },
+                        project: { scope: projectScope, dryRun: dryRun ? true : undefined, ...projectResult },
                     }, null, 2);
                 }
                 finally {

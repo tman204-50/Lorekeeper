@@ -1083,19 +1083,32 @@ export class MemoryStore {
         await this.maybeOptimizeAll(false);
         return toDelete.length;
     }
-    async consolidateDuplicates(scope, threshold, candidateLimit = 50) {
+    async consolidateDuplicates(scope, threshold, candidateLimit = 50, opts = {}) {
         // TIMING_SPANS (1.4.7): consolidation is throttled but heavy (ANN batch
         // scan + batched writes); track it separately from the search path.
         const spanExtra = {};
         const stop = startSpan("store.consolidate");
         try {
-            return await this._consolidateDuplicates(scope, threshold, candidateLimit, spanExtra);
+            return await this._consolidateDuplicates(scope, threshold, candidateLimit, spanExtra, opts);
         }
         finally {
-            stop(spanExtra.rows !== undefined ? { rows: spanExtra.rows } : undefined);
+            // CONSOLIDATE_DRYRUN (0.2.4): forward spanExtra.source (cache|db)
+            // alongside rows so the dry-run fast path is visible in /metrics.
+            stop(spanExtra.source !== undefined
+                ? { rows: spanExtra.rows, source: spanExtra.source }
+                : spanExtra.rows !== undefined ? { rows: spanExtra.rows } : undefined);
         }
     }
-    async _consolidateDuplicates(scope, threshold, candidateLimit = 50, spanExtra = {}) {
+    async _consolidateDuplicates(scope, threshold, candidateLimit = 50, spanExtra = {}, opts = {}) {
+        // CONSOLIDATE_DRYRUN (0.2.4): the tool-level dryRun flag used to be
+        // silently stripped (zod unknown-key) and the call ran a REAL merge —
+        // observed 2026-10-05: a "dry" memory_consolidate merged 1 pair for
+        // real on the live store. With dryRun=true, take the read-only
+        // estimate path and never touch the write machinery below (no staged
+        // updates, no graph notifications, no invalidate, no optimize).
+        if (opts.dryRun === true) {
+            return await this._consolidateDryRun(scope, threshold, spanExtra);
+        }
         // MERGE_STATUS_FILTER (1.3.5): consolidation used to run over
         // readByScopesIncludingMerged and only consulted METADATA
         // status:merged/mergedFrom — so digested (retention-hidden) and
@@ -1431,6 +1444,134 @@ export class MemoryStore {
             }
             this.resetConsolidationWriteStage();
         }
+    }
+    // CONSOLIDATE_DRYRUN (0.2.4): read-only duplicate estimate. Reads rows
+    // cache-first (PRUNE_CACHE_REUSE pattern — no fresh multi-thousand-row DB
+    // scan), replaces the LanceDB ANN pass with an exact in-memory pairwise
+    // cosine over the cached vectors, applies the same merge gates as the
+    // write path (active-only rows, 5-minute recall window), and simulates
+    // the greedy merge selection by descending similarity. Writes NOTHING:
+    // no stageConsolidationWrite, no notifyGraphMerged, no invalidateScope,
+    // no maybeOptimizeAll. Response shape mirrors the real run's counters
+    // (mergedPairs/updatedRecords/skippedRecords/clearedFlags) so callers can
+    // compare estimate vs actual, plus `pairs` (top 20, survivor/absorbed/sim)
+    // and spanExtra.source (cache|db) for the store.consolidate span.
+    // @internal — invoked from _consolidateDuplicates when opts.dryRun.
+    async _consolidateDryRun(scope, threshold, spanExtra = {}) {
+        const startedAt = Date.now();
+        const DRYRUN_MAX_ROWS = 5000;
+        let rows;
+        let cacheEntry = null;
+        const entry = this.scopeCache.get(scope);
+        const currentVersion = this.scopeVersions.get(scope) ?? 0;
+        if (entry && entry.version === currentVersion && Array.isArray(entry.records)) {
+            rows = entry.records.slice();
+            cacheEntry = entry;
+            spanExtra.source = "cache";
+        }
+        else {
+            rows = (await this.readByScopesIncludingMerged([scope])).filter((r) => r.status === undefined || r.status === null || r.status === "" || r.status === "active");
+            spanExtra.source = "db";
+        }
+        spanExtra.rows = rows.length;
+        if (rows.length > DRYRUN_MAX_ROWS) {
+            return {
+                dryRun: true,
+                mergedPairs: 0,
+                updatedRecords: 0,
+                skippedRecords: 0,
+                clearedFlags: 0,
+                estimateUnavailable: true,
+                message: `scope ${scope} has ${rows.length} active rows; in-memory estimate supports up to ${DRYRUN_MAX_ROWS}. Run without dryRun for a full scan.`,
+                elapsedMs: Date.now() - startedAt,
+            };
+        }
+        if (rows.length === 0) {
+            return { dryRun: true, mergedPairs: 0, updatedRecords: 0, skippedRecords: 0, clearedFlags: 0, elapsedMs: Date.now() - startedAt };
+        }
+        const now = Date.now();
+        const FIVE_MINUTES_MS = 5 * 60 * 1000;
+        const cachedNorms = cacheEntry?.norms ?? null;
+        const rowsWithNorms = rows.map((row) => ({
+            row,
+            norm: cachedNorms?.get(row.id) ?? vecNorm(row.vector),
+        }));
+        const metaById = new Map(rowsWithNorms.map(({ row }) => [row.id, parseMetadata(row.metadataJson)]));
+        const flaggedIds = new Set([...metaById].filter(([, meta]) => meta.isPotentialDuplicate === true).map(([id]) => id));
+        const bestSimByFlagged = new Map();
+        const candidatePairs = [];
+        let skippedRecords = 0;
+        let lastYieldAt = Date.now();
+        const n = rowsWithNorms.length;
+        for (let i = 0; i < n; i += 1) {
+            const a = rowsWithNorms[i];
+            if (!a.row.vector)
+                continue;
+            for (let j = i + 1; j < n; j += 1) {
+                const b = rowsWithNorms[j];
+                if (!b.row.vector)
+                    continue;
+                const sim = storeFastCosine(a.row.vector, b.row.vector, a.norm, b.norm);
+                if (flaggedIds.has(a.row.id)) {
+                    bestSimByFlagged.set(a.row.id, Math.max(bestSimByFlagged.get(a.row.id) ?? -1, sim));
+                }
+                if (flaggedIds.has(b.row.id)) {
+                    bestSimByFlagged.set(b.row.id, Math.max(bestSimByFlagged.get(b.row.id) ?? -1, sim));
+                }
+                if (sim < threshold)
+                    continue;
+                if (a.row.lastRecalled > 0 && now - a.row.lastRecalled < FIVE_MINUTES_MS) {
+                    skippedRecords += 1;
+                    continue;
+                }
+                if (b.row.lastRecalled > 0 && now - b.row.lastRecalled < FIVE_MINUTES_MS) {
+                    skippedRecords += 1;
+                    continue;
+                }
+                candidatePairs.push({ a: a.row.id, b: b.row.id, sim, aTimestamp: a.row.timestamp, bTimestamp: b.row.timestamp });
+            }
+            // ISSUE3_YIELD: same ~40ms event-loop budget as the write paths.
+            const sliceNow = Date.now();
+            if (sliceNow - lastYieldAt > 40) {
+                await new Promise((resolve) => setImmediate(resolve));
+                lastYieldAt = sliceNow;
+            }
+        }
+        // Greedy selection by descending similarity — the write path is greedy
+        // in scan order; descending-sim is the closest deterministic analog.
+        candidatePairs.sort((x, y) => y.sim - x.sim);
+        const mergedIds = new Set();
+        const pairs = [];
+        for (const p of candidatePairs) {
+            if (mergedIds.has(p.a) || mergedIds.has(p.b))
+                continue;
+            mergedIds.add(p.a);
+            mergedIds.add(p.b);
+            const survivor = p.aTimestamp >= p.bTimestamp ? p.a : p.b;
+            const absorbed = p.aTimestamp >= p.bTimestamp ? p.b : p.a;
+            pairs.push({ survivor, absorbed, sim: Math.round(p.sim * 1000) / 1000 });
+        }
+        // Same flag-clear semantics as DEDUP_FLAG_REVALIDATION: flagged rows
+        // whose best neighbor stays below threshold would have the flag
+        // cleared by a real run.
+        let clearedFlags = 0;
+        for (const [id, bestSim] of bestSimByFlagged) {
+            if (mergedIds.has(id) || bestSim >= threshold)
+                continue;
+            const meta = metaById.get(id);
+            if (!meta || meta.isPotentialDuplicate !== true)
+                continue;
+            clearedFlags += 1;
+        }
+        return {
+            dryRun: true,
+            mergedPairs: pairs.length,
+            updatedRecords: pairs.length * 2,
+            skippedRecords,
+            clearedFlags,
+            pairs: pairs.slice(0, 20),
+            elapsedMs: Date.now() - startedAt,
+        };
     }
     // CONSOLIDATE_WRITE_BATCHING (1.5.8): consolidation staged row updates.
     // @internal — used by _consolidateDuplicates, reset per run.

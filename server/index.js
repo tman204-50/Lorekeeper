@@ -37,7 +37,7 @@ const SCHEMA_VERSION = 1;
 // Bump together with provider/_version.py __version__ and provider/plugin.yaml
 // "version" — logged at boot and served from /health so we can track which
 // code is actually loaded.
-const SERVICE_VERSION = "0.2.3";
+const SERVICE_VERSION = "0.2.4";
 
 const PORT = Number(process.env.LOREKEEPER_PORT ?? 18777);
 const HOST = process.env.LOREKEEPER_HOST ?? "127.0.0.1";
@@ -476,13 +476,15 @@ const handlers = {
   async consolidate(args) {
     // Heavy LLM-backed dedup — exposed over HTTP so long-running
     // consolidations aren't killed by the gateway's tool-call timeout.
+    // dryRun=true returns a read-only estimate (CONSOLIDATE_DRYRUN, 0.2.4).
     await ensureInit();
     const scope = args?.scope ?? "global";
+    const dryRun = args?.dryRun === true;
     if (scope !== "global" && !state.store) return { error: "scope not supported" };
     const threshold = state.config.dedup?.consolidateThreshold;
     const candidateLimit = state.config.dedup?.candidateLimit;
-    const result = await state.store.consolidateDuplicates(scope, threshold, candidateLimit);
-    return { ok: true, scope, result };
+    const result = await state.store.consolidateDuplicates(scope, threshold, candidateLimit, { dryRun });
+    return { ok: true, scope, dryRun: dryRun ? true : undefined, result };
   },
   async stats() {
     await ensureInit();

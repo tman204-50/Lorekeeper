@@ -76,12 +76,25 @@ export declare class MemoryStore {
     listSince(scope: string, sinceTimestamp: number, limit?: number): Promise<MemoryRecord[]>;
     pruneScope(scope: string, maxEntries: number): Promise<number>;
     private _pruneScope;
-    consolidateDuplicates(scope: string, threshold: number, candidateLimit?: number): Promise<{
+    consolidateDuplicates(scope: string, threshold: number, candidateLimit?: number, opts?: {
+        dryRun?: boolean;
+    }): Promise<{
+        dryRun?: boolean;
         mergedPairs: number;
         updatedRecords: number;
         skippedRecords: number;
+        clearedFlags?: number;
+        estimateUnavailable?: boolean;
+        message?: string;
+        pairs?: Array<{
+            survivor: string;
+            absorbed: string;
+            sim: number;
+        }>;
+        elapsedMs?: number;
     }>;
     private _consolidateDuplicates;
+    private _consolidateDryRun;
     private findSimilarVectors;
     countIncompatibleVectors(scopes: string[], expectedDim: number): Promise<number>;
     private matchesId;
