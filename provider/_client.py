@@ -11,9 +11,52 @@ from __future__ import annotations
 
 import http.client
 import json
+import logging
+import os
+import sys
 import threading
+import time
 from typing import Any, Dict, Optional
 from urllib.parse import urlsplit
+
+logger = logging.getLogger("lorekeeper.client")
+
+_syslog_ready = False
+
+
+def _ensure_syslog_logger() -> None:
+    """Route lorekeeper.client records to syslog the way hermes does.
+
+    Hermes itself doesn't call SysLogHandler — the gateway's stderr StreamHandler
+    is picked up by journald and forwarded to /var/log/messages (tagged
+    ``hermes[pid]``). So: under the gateway this logger simply inherits
+    hermes' root handlers; standalone (scripts, tests, other units) nothing
+    upstream is configured, so attach a stderr handler — whatever unit runs
+    the process journald-forwards it under that unit's tag. With
+    LOREKEEPER_CLIENT_DEBUG=1 attach a dedicated DEBUG handler so per-request
+    lines survive a gateway running at INFO.
+    """
+    global _syslog_ready
+    if _syslog_ready:
+        return
+    _syslog_ready = True
+    if os.environ.get("LOREKEEPER_CLIENT_DEBUG"):
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("lorekeeper-client: %(levelname)s %(message)s"))
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+        return
+    node = logger
+    while node is not None and not node.handlers:
+        node = node.parent
+    if node is not None and node.handlers:
+        return  # inherit upstream (hermes gateway) as-is
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("lorekeeper-client: %(levelname)s %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 
 class LorekeeperError(RuntimeError):
@@ -47,20 +90,29 @@ class LorekeeperClient:
             self._conn = None
 
     def _request(self, method: str, path: str, payload: Optional[dict] = None) -> dict:
+        _ensure_syslog_logger()
         body = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
         headers = {"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"}
         transport_err: Optional[Exception] = None
         with self._lock:
             for attempt in (0, 1):
+                reused = self._conn is not None
+                started = time.monotonic()
                 try:
                     if self._conn is None:
                         self._conn = self._new_conn()
                     self._conn.request(method, path, body=body, headers=headers)
                     resp = self._conn.getresponse()
                     raw = resp.read()
+                    logger.debug(
+                        "%s %s -> %s (%.0f ms, conn=%s)",
+                        method, path, resp.status, (time.monotonic() - started) * 1000,
+                        "reused" if reused else "new",
+                    )
                     if resp.status // 100 != 2:
                         # A real server answer: no retry, surface it.
-                        detail = raw.decode("utf-8", "replace")
+                        detail = raw.decode("utf-8", "replace")[:200]
+                        logger.error("%s %s -> HTTP %s: %s", method, path, resp.status, detail)
                         raise LorekeeperError(f"Lorekeeper service HTTP {resp.status}: {detail}")
                     return json.loads(raw) if raw else {}
                 except LorekeeperError:
@@ -71,7 +123,9 @@ class LorekeeperClient:
                     self._close_conn()
                     transport_err = e
                     if attempt:
+                        logger.error("%s %s unreachable after reconnect: %s", method, path, e)
                         break
+                    logger.info("%s %s stale connection (%s), reconnecting", method, path, type(e).__name__)
         raise LorekeeperError(f"Lorekeeper service unreachable at {self._base}: {transport_err}") from transport_err
 
     # -- endpoints -----------------------------------------------------------
@@ -116,3 +170,4 @@ class LorekeeperClient:
     def close(self) -> None:
         with self._lock:
             self._close_conn()
+        logger.debug("connection closed")

@@ -30,7 +30,28 @@ sys.path.insert(0, HERMES_CORE)
 import hermes_bootstrap  # wires the uv venv into sys.path
 sys.path.insert(0, LOREKEEPER)
 
+import logging
+
 from provider._client import LorekeeperClient, LorekeeperError
+
+# Force the client's own DEBUG handler (per-request lines) and capture records
+# through a test handler to assert the logging contract.
+os.environ["LOREKEEPER_CLIENT_DEBUG"] = "1"
+logging.getLogger("lorekeeper.client").setLevel(logging.DEBUG)
+
+
+class _Capture(logging.Handler):
+    records = []
+
+    def emit(self, record):
+        _Capture.records.append(record)
+
+    @staticmethod
+    def messages():
+        return [r.getMessage() for r in _Capture.records]
+
+
+logging.getLogger("lorekeeper.client").addHandler(_Capture())
 
 PORT = 18781
 HOST = f"http://127.0.0.1:{PORT}"
@@ -150,6 +171,23 @@ try:
 
     client.close()
     check("close", client._conn is None, "connection closed")
+
+    # 8. debug logging: per-request lines with method/path/status/duration
+    msgs = _Capture.messages()
+    req_lines = [m for m in msgs if "POST /tools -> 200" in m and "conn=" in m]
+    check("log-request-line", len(req_lines) >= 5, f"{len(req_lines)} request lines, e.g. {req_lines[0] if req_lines else 'none'}")
+
+    # 9. reconnect + failure lines present
+    reconnects = [m for m in msgs if "reconnecting" in m]
+    check("log-reconnect", len(reconnects) >= 1, f"e.g. {reconnects[0] if reconnects else 'none'}")
+    unreachable = [m for m in msgs if "unreachable after reconnect" in m]
+    check("log-unreachable", len(unreachable) >= 1, f"e.g. {unreachable[0] if unreachable else 'none'}")
+    http_err = [m for m in msgs if "HTTP 401" in m]
+    check("log-http-error", len(http_err) >= 1, f"e.g. {http_err[0] if http_err else 'none'}")
+
+    # 10. secrets never logged (token must not appear anywhere)
+    leaked = [m for m in msgs if TOKEN in m or "Bearer" in m]
+    check("no-token-leak", not leaked, f"{len(leaked)} lines contain token/auth header")
 finally:
     if proc.poll() is None:
         proc.terminate()
