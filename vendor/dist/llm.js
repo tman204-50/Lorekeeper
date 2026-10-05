@@ -298,7 +298,18 @@ export async function requestLLMDigest(client, llmConfig, texts, targetChars, gr
     const system = DIGEST_SYSTEM_PROMPT
         .replace("TARGETCHARS", String(Math.max(100, Number(targetChars) || 500)))
         .replace("GROUPKEY", groupKey ?? "memories");
-    const reply = await runEphemeralPrompt(client, llmConfig, system, userPart, "memory-digest");
+    // DIGEST_TIMEOUT (0.2.5): the LLM shim's default hard timeout is 60s, and
+    // digests over large groups (observed: fact-category digest of ~1000
+    // memories) can legitimately need minutes. A timeout here used to look
+    // identical to "model produced nothing" — the digest silently degraded to
+    // the extractive fallback. Give the digest alarm clock 5 minutes; only
+    // honoured when the client supports withTimeout (our shim), otherwise
+    // behavior is unchanged.
+    const DIGEST_PROMPT_TIMEOUT_MS = 300_000;
+    const digestClient = typeof client.withTimeout === "function"
+        ? client.withTimeout(DIGEST_PROMPT_TIMEOUT_MS)
+        : client;
+    const reply = await runEphemeralPrompt(digestClient, llmConfig, system, userPart, "memory-digest");
     if (reply === null || reply.length === 0) {
         log("warn", `[digest] llm digest failed for "${groupKey ?? "memories"}"; falling back to extractive digest`);
         return null;

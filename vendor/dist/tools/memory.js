@@ -1593,6 +1593,12 @@ ${explanations.join("\n")}`;
                         absorbed: digest?.sourceCount ?? group.length,
                         digested,
                         digestChars: digestText.length,
+                        // DIGEST_MODE_VISIBLE (0.2.5): a timeout in the LLM
+                        // digest used to degrade silently to the extractive
+                        // fallback (response looked identical). Say which
+                        // writer produced each digest so callers can tell a
+                        // real abstractive digest from the mechanical one.
+                        digestMode: digest?.llm ? "llm" : "extractive",
                     });
                 }
                 return JSON.stringify({
@@ -1600,6 +1606,13 @@ ${explanations.join("\n")}`;
                     eligible: candidates.length,
                     groups: created.length + dryRunSummary.length,
                     digestsCreated: created.length,
+                    // DIGEST_MODE_VISIBLE (0.2.5): counts by writer — if
+                    // digestModes.extractive > 0 while capture.mode=llm, some
+                    // LLM digests failed and fell back.
+                    digestModes: {
+                        llm: created.filter((c) => c.digestMode === "llm").length,
+                        extractive: created.filter((c) => c.digestMode === "extractive").length,
+                    },
                     dryRun: args.dryRun ? true : undefined,
                     dryRunSummary,
                     created,

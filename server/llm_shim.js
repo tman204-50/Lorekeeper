@@ -29,6 +29,15 @@ export class LLMSessionClient {
     return Object.create(this, { _signal: { value: signal, enumerable: false } });
   }
 
+  // Scoped view with a different per-call hard timeout (DIGEST_TIMEOUT 0.2.5:
+  // digest prompts over large groups can legitimately run minutes, so the
+  // digest path calls client.withTimeout(300000); capture keeps the 60s
+  // default plus its own external 90s abort). Duck-typed by vendor llm.js —
+  // a client without withTimeout keeps its default behavior.
+  withTimeout(timeoutMs) {
+    return Object.create(this, { timeoutMs: { value: timeoutMs, enumerable: false } });
+  }
+
   async _chat(messages, system) {
     const body = {
       model: this.model,
