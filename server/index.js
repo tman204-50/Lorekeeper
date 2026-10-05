@@ -310,7 +310,11 @@ function zodToOpenAISchema(zodSchema) {
   return jsonSchema;
 }
 
+// Registry + zod schemas are static after boot — compute once, serve cached.
+let toolSchemaCache = null;
+
 function toolSchemas() {
+  if (toolSchemaCache) return toolSchemaCache;
   const registry = getToolRegistry();
   const out = [];
   for (const [lorekeeperName, { def }] of registry) {
@@ -326,6 +330,7 @@ function toolSchemas() {
       parameters: { type: "object", properties, required },
     });
   }
+  toolSchemaCache = out;
   return out;
 }
 

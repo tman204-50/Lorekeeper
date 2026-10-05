@@ -1,11 +1,19 @@
-"""Minimal HTTP client for the Lorekeeper memory service (stdlib only)."""
+"""HTTP client for the Lorekeeper memory service (stdlib only).
+
+Holds a single keep-alive connection (urllib opened a fresh TCP connection
+per call). The connection is NOT thread-safe — the provider calls it from
+concurrent threads (prefetch, capture flush, tool dispatch) — so requests
+are serialized with a lock. A stale server-closed keep-alive is recovered by
+one reconnect+retry; non-2xx answers are raised without retry.
+"""
 
 from __future__ import annotations
 
+import http.client
 import json
-import urllib.error
-import urllib.request
+import threading
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 
 class LorekeeperError(RuntimeError):
@@ -17,27 +25,54 @@ class LorekeeperClient:
 
     def __init__(self, host: str, token: str, timeout: float = 10.0):
         self._base = host.rstrip("/")
+        parts = urlsplit(self._base)
+        self._node = parts.hostname or "127.0.0.1"
+        self._port = parts.port or (443 if parts.scheme == "https" else 80)
+        self._https = parts.scheme == "https"
         self._token = token
         self._timeout = timeout
+        self._conn: Optional[http.client.HTTPConnection] = None
+        self._lock = threading.Lock()
 
-    def _request(self, method: str, path: str, payload: Optional[dict] = None) -> dict:
-        url = f"{self._base}{path}"
-        headers = {"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"}
-        body = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
-        req = urllib.request.Request(url, data=body, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-                raw = resp.read().decode("utf-8")
-                return json.loads(raw) if raw else {}
-        except urllib.error.HTTPError as e:
-            detail = ""
+    def _new_conn(self) -> http.client.HTTPConnection:
+        cls = http.client.HTTPSConnection if self._https else http.client.HTTPConnection
+        return cls(self._node, self._port, timeout=self._timeout)
+
+    def _close_conn(self) -> None:
+        if self._conn is not None:
             try:
-                detail = e.read().decode("utf-8")
+                self._conn.close()
             except Exception:
                 pass
-            raise LorekeeperError(f"Lorekeeper service HTTP {e.code}: {detail}") from e
-        except urllib.error.URLError as e:
-            raise LorekeeperError(f"Lorekeeper service unreachable at {self._base}: {e.reason}") from e
+            self._conn = None
+
+    def _request(self, method: str, path: str, payload: Optional[dict] = None) -> dict:
+        body = json.dumps(payload or {}).encode("utf-8") if payload is not None else None
+        headers = {"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"}
+        transport_err: Optional[Exception] = None
+        with self._lock:
+            for attempt in (0, 1):
+                try:
+                    if self._conn is None:
+                        self._conn = self._new_conn()
+                    self._conn.request(method, path, body=body, headers=headers)
+                    resp = self._conn.getresponse()
+                    raw = resp.read()
+                    if resp.status // 100 != 2:
+                        # A real server answer: no retry, surface it.
+                        detail = raw.decode("utf-8", "replace")
+                        raise LorekeeperError(f"Lorekeeper service HTTP {resp.status}: {detail}")
+                    return json.loads(raw) if raw else {}
+                except LorekeeperError:
+                    raise
+                except (http.client.HTTPException, OSError) as e:
+                    # Stale keep-alive (server closed the idle connection) or a
+                    # dropped socket: drop the connection; retry once, then fail.
+                    self._close_conn()
+                    transport_err = e
+                    if attempt:
+                        break
+        raise LorekeeperError(f"Lorekeeper service unreachable at {self._base}: {transport_err}") from transport_err
 
     # -- endpoints -----------------------------------------------------------
 
@@ -79,4 +114,5 @@ class LorekeeperClient:
         return self._request("POST", "/tool", {"name": name, "toolArgs": tool_args})
 
     def close(self) -> None:
-        pass  # urllib has no persistent connection to close
+        with self._lock:
+            self._close_conn()

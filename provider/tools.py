@@ -15,8 +15,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from ._client import LorekeeperClient, LorekeeperError
 
@@ -24,9 +25,24 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_HOST = "http://127.0.0.1:18777"
 
+# check_fn (_available) runs on every gating check and used to re-read
+# lorekeeper.json + the token file from disk each time. Cache the built
+# client keyed on the files' (mtime_ns, size); any edit invalidates it and
+# missing files cache a None (fail-closed) result.
+_client_lock = threading.Lock()
+_client_cache: Optional[LorekeeperClient] = None
+_client_sig: Optional[tuple] = None
 
-def _client() -> LorekeeperClient | None:
-    """Build the client from lorekeeper.json + token without session kwargs."""
+
+def _file_sig(path: Path) -> tuple:
+    try:
+        st = path.stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _resolve_client_uncached() -> LorekeeperClient | None:
     home = Path(os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes"))
     cfg: dict = {}
     try:
@@ -43,6 +59,21 @@ def _client() -> LorekeeperClient | None:
     if not (host and token):
         return None
     return LorekeeperClient(host, token)
+
+
+def _client() -> LorekeeperClient | None:
+    """Build the client from lorekeeper.json + token without session kwargs."""
+    global _client_cache, _client_sig
+    home = Path(os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes"))
+    sig = (str(home), _file_sig(home / "lorekeeper.json"), _file_sig(home / "lorekeeper" / "token"))
+    # Resolution is two small file reads — hold the lock across it so a
+    # cold/invalidated cache is rebuilt single-flight, not once per thread.
+    with _client_lock:
+        if sig == _client_sig:
+            return _client_cache
+        client = _resolve_client_uncached()
+        _client_sig, _client_cache = sig, client
+        return client
 
 
 def _available() -> bool:

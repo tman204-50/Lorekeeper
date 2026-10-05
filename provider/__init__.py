@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -34,6 +35,14 @@ _PREFETCH_WAIT_SECS = 3
 # newest tail, cap total chars per session so a failing service can't grow
 # memory without bound.
 _CAPTURE_MAX_CHARS = 60000
+# Flush threshold: turns are buffered per session and sent to /capture in
+# batches. capture.mode=llm means every flush is an LLM extraction call, so
+# flushing per turn costs one LLM round-trip per turn — threshold flushing
+# cuts that by ~10x. Override via lorekeeper.json "captureFlushChars".
+_CAPTURE_FLUSH_CHARS = 1200
+# Cap on assistant text fed to a single turn's buffer: extraction only needs
+# the substance, not full code dumps (assistant output can hit 60k chars).
+_CAPTURE_TURN_MAX_CHARS = 6000
 
 
 def _read_config(hermes_home: Path) -> dict:
@@ -73,8 +82,11 @@ class LorekeeperMemoryProvider(MemoryProvider):
         self._channel = "cli"
         self._prefetch_query = self._prefetch_result = ""
         self._prefetch_done = False
-        self._prefetch_thread = None
+        self._prefetch_future: Optional[Future] = None
         self._prefetch_lock = threading.Lock()
+        # Shared worker pool for the fire-and-forget jobs (prefetch search,
+        # capture flush) — replaces a fresh daemon thread per turn.
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="lorekeeper")
         # Capture: per-session text buffers + in-flight guards (thread-safe).
         self._capture_buffers: Dict[str, str] = {}
         self._capture_flushing: set = set()
@@ -126,6 +138,8 @@ class LorekeeperMemoryProvider(MemoryProvider):
 
     def shutdown(self) -> None:
         with suppress(Exception):
+            self._executor.shutdown(wait=False)
+        with suppress(Exception):
             if self._client:
                 self._client.close()
                 self._client = None
@@ -139,10 +153,10 @@ class LorekeeperMemoryProvider(MemoryProvider):
     def on_turn_start(self, turn_number: int, message: str, **kwargs) -> None:
         self._start_prefetch(message)
 
-    def _start_prefetch(self, query: str) -> None:
+    def _start_prefetch(self, query: str) -> Optional[Future]:
         client = self._client
         if not query or client is None:
-            return
+            return None
 
         def _run():
             try:
@@ -157,11 +171,11 @@ class LorekeeperMemoryProvider(MemoryProvider):
                     self._prefetch_result, self._prefetch_done = body, True
 
         with self._prefetch_lock:
-            if self._prefetch_query == query and (self._prefetch_done or (self._prefetch_thread and self._prefetch_thread.is_alive())):
-                return
+            if self._prefetch_query == query and (self._prefetch_done or (self._prefetch_future and not self._prefetch_future.done())):
+                return self._prefetch_future
             self._prefetch_query, self._prefetch_result, self._prefetch_done = query, "", False
-            self._prefetch_thread = t = threading.Thread(target=_run, daemon=True, name="lorekeeper-prefetch")
-        t.start()
+            self._prefetch_future = fut = self._executor.submit(_run)
+        return fut
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         with self._prefetch_lock:
@@ -169,12 +183,13 @@ class LorekeeperMemoryProvider(MemoryProvider):
                 cached = None
             else:
                 cached, self._prefetch_result, self._prefetch_done = self._prefetch_result, "", False
-            thread = self._prefetch_thread if self._prefetch_query == query else None
+            fut = self._prefetch_future if self._prefetch_query == query else None
         if cached is not None:
             return cached
-        self._start_prefetch(query)
-        if thread:
-            thread.join(timeout=_PREFETCH_WAIT_SECS)
+        fut = self._start_prefetch(query) or fut
+        if fut:
+            with suppress(Exception):  # TimeoutError / worker error -> "" below
+                fut.result(timeout=_PREFETCH_WAIT_SECS)
         with self._prefetch_lock:
             if self._prefetch_query == query and self._prefetch_done:
                 result, self._prefetch_result, self._prefetch_done = self._prefetch_result, "", False
@@ -182,19 +197,23 @@ class LorekeeperMemoryProvider(MemoryProvider):
         return ""
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "", messages: Optional[List[Dict[str, Any]]] = None) -> None:
-        """Buffer the completed turn and flush to /capture (non-blocking).
+        """Buffer the completed turn; flush at the threshold (or on session
+        end / compress / switch — those call _flush_capture directly).
 
-        Mirrors the fork's capture-on-idle: each turn's text is appended to a
-        per-session buffer; once it crosses _CAPTURE_FLUSH_CHARS (or the
-        session ends / compresses), the buffer is sent to the service which
-        runs heuristics extraction and stores what's memory-worthy.
+        Mirrors the fork's capture-on-idle design: turns are batched per
+        session so the service runs LLM extraction once per threshold, not
+        once per turn. The service's minCaptureChars gate filters noise; dedup
+        blocks repeats.
         """
         if self._client is None:
             return
-        text = f"{user_content or ''}\n{assistant_content or ''}".strip()
+        user = (user_content or "").strip()
+        assistant = (assistant_content or "").strip()[:_CAPTURE_TURN_MAX_CHARS]
+        text = f"{user}\n{assistant}".strip()
         if not text:
             return
         sid = session_id or "default"
+        flush_now = False
         with self._capture_lock:
             prev = self._capture_buffers.get(sid, "")
             combined = f"{prev}\n{text}" if prev else text
@@ -202,9 +221,13 @@ class LorekeeperMemoryProvider(MemoryProvider):
             if len(combined) > _CAPTURE_MAX_CHARS:
                 combined = combined[-_CAPTURE_MAX_CHARS:]
             self._capture_buffers[sid] = combined
-        # Flush every turn (mirrors the fork's capture-on-session-idle). The
-        # service's minCaptureChars gate filters noise; dedup blocks repeats.
-        self._flush_capture(sid, synchronous=False)
+            try:
+                threshold = int(self._config.get("captureFlushChars") or _CAPTURE_FLUSH_CHARS)
+            except (TypeError, ValueError):
+                threshold = _CAPTURE_FLUSH_CHARS
+            flush_now = len(combined) >= threshold
+        if flush_now:
+            self._flush_capture(sid, synchronous=False)
 
     def _flush_capture(self, session_id: str, *, synchronous: bool) -> None:
         """Send the session's buffered text to /capture. On failure the buffer
@@ -234,7 +257,7 @@ class LorekeeperMemoryProvider(MemoryProvider):
         if synchronous:
             _run()
         else:
-            threading.Thread(target=_run, daemon=True, name="lorekeeper-capture").start()
+            self._executor.submit(_run)
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         """Flush any buffered capture at a real session boundary."""
@@ -243,10 +266,17 @@ class LorekeeperMemoryProvider(MemoryProvider):
     def on_session_switch(
         self, new_session_id: str, *, parent_session_id: str = "", reset: bool = False, rewound: bool = False, **kwargs,
     ) -> None:
-        """Rebind capture buffers on session switch; flush on a genuinely new
-        conversation so nothing buffered is lost."""
-        if reset and self._current_session and self._current_session != new_session_id:
-            self._flush_capture(self._current_session, synchronous=False)
+        """Flush capture buffers on a genuinely new conversation so nothing
+        buffered is lost. Flushes every buffered session, not just
+        _current_session: sync_turn keys buffers by the session_id it was
+        given, which can diverge from _current_session (subagent turns,
+        rewinds) — flushing only the tracked one would strand those buffers.
+        """
+        if reset:
+            with self._capture_lock:
+                sids = [s for s in self._capture_buffers if s != new_session_id]
+            for sid in sids:
+                self._flush_capture(sid, synchronous=False)
         self._current_session = new_session_id
 
     def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
