@@ -912,10 +912,16 @@ ${explanations.join("\n")}`;
             },
         }),
         memory_global_list: tool({
-            description: "List all global-scoped memories, optionally filtered by search query or unused status",
+            description: "List all global-scoped memories, optionally filtered by search query, unused status, or disabled (soft-deleted) status",
             args: {
                 query: tool.schema.string().optional(),
-                filter: tool.schema.string().optional(),
+                // GLOBAL_LIST_FILTER_STRICT (0.2.6): filter was a free string
+                // silently ignored unless it was exactly "unused" — any other
+                // value returned the unfiltered list with no error. Now an
+                // enum; unknown values are a schema error. "disabled" lists
+                // soft-deleted rows (marked [DISABLED]) so a forget stays
+                // auditable instead of invisible.
+                filter: tool.schema.enum(["unused", "disabled"]).optional(),
                 limit: tool.schema.number().int().min(1).max(100).default(20),
             },
             execute: async (args) => {
@@ -925,6 +931,9 @@ ${explanations.join("\n")}`;
                 let records;
                 if (args.filter === "unused") {
                     records = await state.store.getUnusedGlobalMemories(state.config.unusedDaysThreshold, args.limit ?? 20);
+                }
+                else if (args.filter === "disabled") {
+                    records = await state.store.readGlobalMemoriesDisabled(args.limit ?? 20);
                 }
                 else if (args.query) {
                     let queryVector = [];
@@ -958,7 +967,8 @@ ${explanations.join("\n")}`;
                     const lastRecalled = record.lastRecalled > 0
                         ? new Date(record.lastRecalled).toISOString().split("T")[0]
                         : "never";
-                    return `${idx + 1}. [${record.id}] ${record.text.slice(0, 80)}...
+                    const flag = record.status === "disabled" ? "[DISABLED] " : "";
+                    return `${idx + 1}. ${flag}[${record.id}] ${record.text.slice(0, 80)}...
   Stored: ${date} | Recalled: ${lastRecalled} | Count: ${record.recallCount} | Projects: ${record.projectCount}`;
                 })
                     .join("\n");

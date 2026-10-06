@@ -71,6 +71,7 @@ export declare class MemoryStore {
     updateMemoryScope(id: string, newScope: string, scopes: string[]): Promise<boolean>;
     readGlobalMemories(limit?: number): Promise<MemoryRecord[]>;
     getUnusedGlobalMemories(unusedDaysThreshold: number, limit?: number): Promise<MemoryRecord[]>;
+    readGlobalMemoriesDisabled(limit?: number): Promise<MemoryRecord[]>;
     clearScope(scope: string): Promise<number>;
     list(scope: string, limit: number): Promise<MemoryRecord[]>;
     listSince(scope: string, sinceTimestamp: number, limit?: number): Promise<MemoryRecord[]>;
@@ -147,6 +148,10 @@ export declare class MemoryStore {
     updateTaskState(taskId: string, state: TaskState, scope: string, failureType?: string, errorMessage?: string): Promise<boolean>;
     getTaskEpisode(taskId: string, scope: string): Promise<EpisodicTaskRecord | null>;
     queryTaskEpisodes(scope: string, state?: TaskState, sinceTimestamp?: number): Promise<EpisodicTaskRecord[]>;
+    deleteTaskEpisodes(scope: string, opts?: {
+        episodeId?: string;
+        taskId?: string;
+    }): Promise<number>;
     /**
      * Generic helper for appending items to an episodic task's JSON array field.
      * Centralizes the read-parse-push-write pattern across all add*Episode methods.

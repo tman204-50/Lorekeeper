@@ -84,6 +84,34 @@ export function createEpisodicTools(state) {
                 }).join("\n");
             },
         }),
+        task_episode_delete: tool({
+            // EPISODE_DELETE (0.2.6): no delete path existed — test/cron
+            // episodes accumulated forever. Deletes by episode id, or by
+            // taskId (every episode of that task), always scope-limited.
+            description: "Delete task episodes — by episode id, or all episodes of a taskId. Scope-limited. Requires confirm=true. Use to clean up stale or test episodes.",
+            args: {
+                episodeId: tool.schema.string().optional(),
+                taskId: tool.schema.string().optional(),
+                scope: tool.schema.string().optional(),
+                confirm: tool.schema.boolean().default(false),
+            },
+            execute: async (args, context) => {
+                await state.ensureInitialized();
+                if (!state.initialized)
+                    return unavailableMessage();
+                if (!args.confirm) {
+                    return "Rejected: task_episode_delete requires confirm=true.";
+                }
+                if (!args.episodeId && !args.taskId) {
+                    return "Provide episodeId or taskId.";
+                }
+                const activeScope = resolveScope(args.scope, context.directory || context.worktree);
+                const deleted = await safeStoreCall(state.store, "deleteTaskEpisodes", () => state.store.deleteTaskEpisodes(activeScope, { episodeId: args.episodeId, taskId: args.taskId }));
+                if (typeof deleted === "string")
+                    return deleted;
+                return `Deleted ${deleted} task episode(s) in scope ${activeScope}`;
+            },
+        }),
         similar_task_recall: tool({
             description: "Find similar past tasks by keyword overlap over their task id, description, and commands (no embeddings used). A task matches when at least the threshold fraction of the query's words appear.",
             args: {

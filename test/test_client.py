@@ -248,12 +248,14 @@ try:
 
     client = LorekeeperClient(HOST, TOKEN)
 
-    # 1. repeated requests over one connection
+    # 1. repeated requests over one connection (schema count must be stable;
+    # don't hardcode the absolute count — new tools shift it legitimately)
+    expected_tools = len(client.tools().get("tools", []))
     ok_all = True
     for _ in range(5):
         resp = client.tools()
-        ok_all = ok_all and len(resp.get("tools", [])) == 34
-    check("repeated-requests", ok_all, "5x /tools, 34 schemas each")
+        ok_all = ok_all and len(resp.get("tools", [])) == expected_tools
+    check("repeated-requests", ok_all, f"5x /tools, {expected_tools} schemas each")
 
     # 1b. version handshake: /health carries the version; client logged its own
     h = client.health()
@@ -293,7 +295,7 @@ try:
     else:
         try:
             resp = client.tools()
-            check("stale-reconnect", len(resp.get("tools", [])) == 34, "reconnected after server restart")
+            check("stale-reconnect", len(resp.get("tools", [])) == expected_tools, "reconnected after server restart")
         except LorekeeperError as e:
             check("stale-reconnect", False, str(e)[:80])
 
@@ -314,7 +316,7 @@ try:
         t.start()
     for t in threads:
         t.join()
-    check("concurrent-safe", not errs and counts.count(34) == 40,
+    check("concurrent-safe", not errs and counts.count(expected_tools) == 40,
           f"4 threads x 10 calls: {len(counts)} ok, {len(errs)} errors")
 
     client.close()

@@ -991,6 +991,17 @@ export class MemoryStore {
         const rows = await this.readByScopes(["global"]);
         return rows.filter((row) => row.lastRecalled > 0 && row.lastRecalled < cutoffTime).slice(0, limit);
     }
+    async readGlobalMemoriesDisabled(limit = 100) {
+        // SOFT_DELETE_VISIBILITY (0.2.6): disabled rows were invisible
+        // everywhere (search filters them, readByScopes filters them), so a
+        // soft-deleted memory looked simply gone and could not be audited or
+        // restored by id. Expose them for global_list filter="disabled".
+        const rows = await this.readByScopesIncludingMerged(["global"]);
+        return rows
+            .filter((row) => row.status === "disabled")
+            .sort((a, b) => b.timestamp - a.timestamp)
+            .slice(0, limit);
+    }
     async clearScope(scope) {
         // CLEAR_SCOPE_COUNT_ALL (1.4.6): readByScopes filters merged/digested/
         // disabled rows, but the delete below removes ALL rows in the scope —
@@ -2722,6 +2733,27 @@ export class MemoryStore {
         // every row, not just a capped prefix).
         const rows = await table.query().where(whereClause).orderBy(EPISODE_SCAN_ORDER).limit(EPISODE_SCAN_LIMIT).toArray();
         return validateEpisodicRecordArray(rows);
+    }
+    async deleteTaskEpisodes(scope, { episodeId, taskId } = {}) {
+        // EPISODE_DELETE (0.2.6): no delete path existed, so test/cron
+        // episodes accumulated forever. Deletes by episode id or by taskId
+        // (every episode of that task), always scoped to avoid cross-project
+        // damage; count-then-delete so callers can report how many rows went.
+        await this.ensureEpisodicTaskTable(384);
+        const table = this.requireEpisodicTaskTable();
+        const clauses = [];
+        if (episodeId)
+            clauses.push(`id = '${escapeSql(episodeId)}'`);
+        if (taskId)
+            clauses.push(`taskId = '${escapeSql(taskId)}'`);
+        if (clauses.length === 0)
+            return 0;
+        const where = `scope = '${escapeSql(scope)}' AND (${clauses.join(" OR ")})`;
+        const rows = await table.query().where(where).toArray();
+        if (rows.length === 0)
+            return 0;
+        await table.delete(where);
+        return rows.length;
     }
     /**
      * Generic helper for appending items to an episodic task's JSON array field.
