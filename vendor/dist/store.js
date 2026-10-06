@@ -35,6 +35,17 @@ const STALE_AFTER_MS = envInt("OPENCODE_MEMORY_PRO_STALE_AFTER_MS", 10 * 60 * 10
 // the cap is an explicit, documented decision (memory cost: ~6KB/record for
 // the vector + tokenized + norms, so 50k ≈ 300-500MB/scope in JS).
 const MAX_RECORDS_PER_SCOPE = envInt("OPENCODE_MEMORY_PRO_MAX_RECORDS_PER_SCOPE", 1_000, 100, 5_000_000);
+// SELF_TUNING (Phase 7): defaults for the in-process parameter registry.
+// Initialized lazily in _search if the constructor didn't set them.
+const DEFAULT_TUNABLE_PARAMS = {
+    vectorWeight: { value: 0.7, min: 0.3, max: 0.9, delta: 0.05, enabled: true },
+    bm25Weight: { value: 0.3, min: 0.1, max: 0.7, delta: 0.05, enabled: true },
+    fuzzyWeight: { value: 0.15, min: 0.0, max: 0.5, delta: 0.05, enabled: true },
+    rrfK: { value: 60, min: 10, max: 120, delta: 10, enabled: true },
+    feedbackWeight: { value: 0.3, min: 0.0, max: 0.5, delta: 0.05, enabled: true },
+    recencyHalfLifeHours: { value: 72, min: 24, max: 336, delta: 12, enabled: true },
+    importanceWeight: { value: 0.4, min: 0.0, max: 1.0, delta: 0.05, enabled: true },
+};
 const DEFAULT_CACHE_CONFIG = {
     maxScopes: 10,
     maxRecordsPerScope: MAX_RECORDS_PER_SCOPE,
@@ -989,6 +1000,8 @@ export class MemoryStore {
         // SELF_TUNING (Phase 7): increment search call counter and check if a
         // trial should fire. Fire-and-forget — trials run asynchronously and
         // never delay the live search response.
+        if (!this.trialState) this.trialState = { searchCalls: 0, trialInterval: 500, lastTrialSearchCount: 0, baseline: null, bestParams: null, isRunning: false, consecutiveFailures: 0 };
+        if (!this.tunableParams) this.tunableParams = DEFAULT_TUNABLE_PARAMS;
         this.trialState.searchCalls = (this.trialState.searchCalls ?? 0) + 1;
         if (this.evalCases.length > 0 && !this.trialState.isRunning &&
             (this.trialState.searchCalls ?? 0) - (this.trialState.lastTrialSearchCount ?? 0) >= (this.trialState.trialInterval ?? 500)) {
