@@ -7,4 +7,4 @@ service versions (from /health) at initialize, the service logs its own at
 boot. This is how we track which code is actually loaded on the box.
 """
 
-__version__ = "0.2.12"
+__version__ = "0.2.13"
