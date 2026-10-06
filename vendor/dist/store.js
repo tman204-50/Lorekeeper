@@ -878,6 +878,7 @@ export class MemoryStore {
             // SEARCH_SIGNALS (0.2.11): track how feedbackWeight channel
             // distributes across records — blind since 1.6.
             if (feedbackWeight > 0) {
+                if (!this.searchSignals) this.searchSignals = { calls: 0, boosted: 0, penalized: 0, neutral: 0 };
                 if (feedbackFactor > 1.01) this.searchSignals.boosted++;
                 else if (feedbackFactor < 0.99) this.searchSignals.penalized++;
                 else this.searchSignals.neutral++;
