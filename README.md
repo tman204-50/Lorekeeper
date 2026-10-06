@@ -96,7 +96,7 @@ Config: `~/.hermes/lorekeeper.json` via `hermes memory setup` (host field).
 | POST | `/delete` | `{id, force?}` → `{ok, id}` |
 | POST | `/stats` | `{}` → `{counts, index}` |
 | POST | `/list` | `{scope?, limit?}` → `{results}` |
-| POST | `/export` | `{}` → `{memories}` |
+| POST | `/exportAll` | `{}` → `{memories}` |
 | POST | `/import` | `{memories, mode?}` → `{imported}` |
 | POST | `/consolidate` | `{scope?, dryRun?}` → `{ok, scope, result}` (dryRun = fast read-only duplicate estimate) |
 | POST | `/metrics` | `{}` → `{timing:[{op,count,avgMs,lastMs,lastExtra}], scopeCache}`; `{"reset":true}` clears |
@@ -137,6 +137,14 @@ What this fork adds over upstream 1.6.2 (all regression-tested; see `test/`):
 - Consolidation survivors stash absorbed text in
   `metadata.mergedTexts [{id, text ≤800c, mergedAt}]` (last 10) — near-dup
   wording no longer leaves recall unrecoverably.
+- `memory_export`/`memory_import` refuse `/tmp`, `/var/tmp`, `/dev/shm`
+  paths (0.2.9): the service runs under systemd `PrivateTmp=yes`, so files
+  written there land in a private mount namespace the agent can't see — a
+  silent split that made exports look "fabricated". Rejected with an
+  actionable error; use a stable path (e.g. `/root/.hermes/workspace/...`).
+- Tool results that fail *inside* a 200 (vendor tools returning
+  `{error: ...}`) are surfaced as `Lorekeeper tool failed: ...` instead of a
+  clean-looking result (0.2.9).
 
 **Digests / observability**
 - Digest LLM prompts get a 300s budget via `LLMSessionClient.withTimeout`
@@ -173,10 +181,12 @@ not the Hermes-facing service.
 ```bash
 # python (HTTP-level, boots scratch services on dedicated ports)
 python3 test/test_client.py test_shared.py test_fuzzy_recall.py \
-        test_capture_flush.py test_tools_cache.py test_consolidate_dryrun.py
+        test_capture_flush.py test_tools_cache.py test_consolidate_dryrun.py \
+        test_prefetch_query.py test_v029_client.py
 
 # node (store-level, temp LanceDB dirs, mock embedders / mock OpenRouter)
-node test/test_digest_shim.mjs test/test_f234_fixes.mjs test/test_gap12_f1.mjs
+node test/test_digest_shim.mjs test/test_f234_fixes.mjs test/test_gap12_f1.mjs \
+     test/test_v029_guard.mjs
 ```
 
 Every fork change ships with a regression test in this suite.

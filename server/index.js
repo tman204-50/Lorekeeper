@@ -32,12 +32,13 @@ import { createEpisodicTools } from "../vendor/dist/tools/episodic.js";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { getTimingStats, resetTimingStats, startSpan } from "../vendor/dist/timing.js";
 import { LLMSessionClient } from "./llm_shim.js";
+import { assertSafeFilePath } from "./path_guard.js";
 
 const SCHEMA_VERSION = 1;
 // Bump together with provider/_version.py __version__ and provider/plugin.yaml
 // "version" — logged at boot and served from /health so we can track which
 // code is actually loaded.
-const SERVICE_VERSION = "0.2.8";
+const SERVICE_VERSION = "0.2.9";
 
 const PORT = Number(process.env.LOREKEEPER_PORT ?? 18777);
 const HOST = process.env.LOREKEEPER_HOST ?? "127.0.0.1";
@@ -379,6 +380,7 @@ async function runTool(name, args) {
   const registry = getToolRegistry();
   const entry = registry.get(name);
   if (!entry) throw new Error(`unknown tool: ${name}`);
+  assertSafeFilePath(name, args ?? {});
   await ensureInit();
   const context = { directory: process.cwd(), worktree: process.cwd(), sessionID: args.sessionID ?? `service-${Date.now()}` };
   return await entry.def.execute(args ?? {}, context);

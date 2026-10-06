@@ -3,3 +3,5 @@ node_modules/
 .DS_Store
 test/tmp/
 __pycache__/
+*.so
+lk-test-export.json

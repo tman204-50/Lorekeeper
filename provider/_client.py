@@ -96,6 +96,34 @@ class LorekeeperError(RuntimeError):
     """Raised on transport failure or a non-2xx service response."""
 
 
+def error_from_result(result: Any) -> Optional[str]:
+    """Detect a tool that failed inside a 200 response.
+
+    Most fork tools signal failure by throwing (the service answers 500), but
+    a few return a JSON body with an ``error`` key from a 2xx (e.g.
+    memory_import's read/validation failures). Surface those as errors so the
+    agent sees a failure instead of a clean-looking result.
+    """
+    if not isinstance(result, dict):
+        return None
+    payload = result.get("result")
+    if isinstance(payload, str):
+        stripped = payload.strip()
+        if not stripped.startswith("{"):
+            return None
+        try:
+            obj = json.loads(stripped)
+        except Exception:
+            return None
+    elif isinstance(payload, dict):
+        obj = payload
+    else:
+        return None
+    if isinstance(obj, dict) and obj.get("error"):
+        return str(obj["error"])
+    return None
+
+
 class LorekeeperClient:
     """Bearer-authenticated JSON client for the loopback Lorekeeper service."""
 

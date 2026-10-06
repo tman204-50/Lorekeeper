@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from . import _shared
-from ._client import LorekeeperClient, LorekeeperError
+from ._client import LorekeeperClient, LorekeeperError, error_from_result
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,9 @@ def _make_handler(client: LorekeeperClient, name: str):
             return f"Lorekeeper tool failed: {e}"
         except Exception as e:  # never break the agent loop on transport hiccups
             return f"Lorekeeper tool failed: {e}"
+        err = error_from_result(result)
+        if err is not None:
+            return f"Lorekeeper tool failed: {err}"
         payload = result.get("result")
         return payload if isinstance(payload, str) else json.dumps(payload)
 

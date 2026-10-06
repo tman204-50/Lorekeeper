@@ -26,7 +26,7 @@ from agent.memory_provider import MemoryProvider
 from agent.secret_scope import get_secret
 from tools.registry import tool_error
 
-from ._client import LorekeeperError
+from ._client import LorekeeperError, error_from_result
 from ._shared import get_client, get_tool_schemas
 from ._version import __version__
 
@@ -380,6 +380,9 @@ class LorekeeperMemoryProvider(MemoryProvider):
             return json.dumps({"error": "Lorekeeper service not initialized. Is the service running? (see Lorekeeper README)"})
         try:
             result = self._client.tool(tool_name, args)
+            err = error_from_result(result)
+            if err is not None:
+                return tool_error(f"Lorekeeper tool failed: {err}")
             # The service returns {result: <string|object|array>}.
             payload = result.get("result")
             if isinstance(payload, str):
