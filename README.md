@@ -159,6 +159,35 @@ What this fork adds over upstream 1.6.2 (all regression-tested; see `test/`):
   abort), and HTTP `/consolidate` (so long consolidations survive gateway
   tool timeouts).
 
+**Self-tuning recall (Phase 6-7, v0.2.12)**
+- Eval harness: `test/recall_eval.mjs` replays 40 query→expected-id pairs
+  through the live store, computes MRR + top-5 hit rate, exits 1 on
+  regression. Baseline captured at `test/eval/baseline.json`.
+- Metrics counters (`searchSignals` in /metrics) — the feedbackWeight
+  channel ran blind since 1.6; now visible as boosted/penalized/neutral.
+- D4 citation arbitration — memories with verified citations that receive
+  negative feedback are not penalized (agent-error attribution).
+- Inferred feedback (D1) — successful zero-retry task episodes
+  cross-reference recall events by sessionId to auto-boost helpful memories.
+  Gated by `OPENCODE_MEMORY_PRO_INFERRED_FEEDBACK_ENABLED`.
+- D3 expire sweep — `retentionCandidates()` respects max importance
+  thresholds and a protected-category allowlist.
+- Tripwire: `lorekeeper eval-check` runs the eval against live store, fires
+  `scripts/notify` on regression, exits 1.
+- **Dynamic self-tuning (Phase 7):** the store observes its own recall
+  quality and adjusts 7 retrieval parameters at runtime — no external
+  scripts or cron:
+  - Parameter registry: `vectorWeight`, `bm25Weight`, `fuzzyWeight`, `rrfK`,
+    `feedbackWeight`, `recencyHalfLifeHours`, `importanceWeight` — each with
+    min, max, delta bounds.
+  - Every ~500 search calls, the store runs an in-process trial: grid-search
+    ±delta per enabled dimension against the eval set. Winner auto-promotes
+    if MRR improves ≥0.5%. On plateau, random-walks one parameter.
+  - Promoted values persist to `~/.hermes/lorekeeper/tuning.json` and
+    survive service restarts. `LOREKEEPER_TUNING_PATH` env to override.
+  - Safety rollback: `rollbackTuning()` deletes the tuning file; next boot
+    falls back to factory defaults. D7 regression triggers auto-rollback.
+
 **Tool count note:** the service serves **35** tools (the 34 upstream fork
 tools + `lorekeeper_task_episode_delete`).
 
@@ -201,6 +230,7 @@ lorekeeper status    # service + DB health (exit 1 if not running)
 lorekeeper init      # initialize the store (idempotent)
 lorekeeper install   # copy provider/ -> $HERMES_HOME/plugins/lorekeeper/
 lorekeeper serve     # run the service in the foreground
+lorekeeper eval-check  # run eval set against live store, exit 1 on regression
 ```
 
 Env: `LOREKEEPER_PORT`, `LOREKEEPER_TOKEN`, `LOREKEEPER_DB_PATH`,
@@ -217,6 +247,8 @@ Env: `LOREKEEPER_PORT`, `LOREKEEPER_TOKEN`, `LOREKEEPER_DB_PATH`,
 - `OPENCODE_MEMORY_PRO_CAPTURE_LLM_MODEL` — default `minimax/minimax-m3`.
 - `LOREKEEPER_CLIENT_DEBUG=1` — per-request debug lines from the Python client.
 - `LOREKEEPER_HOST` — bind address (default `127.0.0.1`; see deployment notes).
+- `LOREKEEPER_TUNING_PATH` — path to the persisted tuning override file
+  (default `~/.hermes/lorekeeper/tuning.json`).
 
 ## Data locations
 
@@ -232,12 +264,10 @@ Env: `LOREKEEPER_PORT`, `LOREKEEPER_TOKEN`, `LOREKEEPER_DB_PATH`,
 - [x] Phase 4: auto-capture (service /capture + provider sync_turn/session hooks)
 - [x] Phase 4b: LLM capture/digests via OpenRouter shim (minimax/minimax-m3)
 - [x] Phase 5: imported old OpenClaw gold memories (885, via import_old_data.mjs)
-- [x] v0.2.x hardening: client efficiency round (timeouts, keep-alive, caches,
-      retries), recall-latency round (trigram fuzzy channel, incremental scope
-      cache, pruneScope reuse), safety round (consolidate dryRun, task episode
-      delete, global_list enum+disabled visibility, merge text stash),
-      digest round (300s LLM budget, digestMode visibility, digest feedback
-      events), `/metrics` observability, install.sh staleness guard.
+- [x] Phase 7: in-process self-tuning (parameter registry, trial loop every
+      500 searches, grid-search ± delta per dimension, auto-promote ≥0.5%
+      MRR improvement, random walk on plateau, tuning.json persistence,
+      safety rollback on regression).
 
 See `PLAN.md` for details.
 
