@@ -162,6 +162,9 @@ async function ensureInit() {
       } catch (e) {
         log("warn", `self-tuning eval set not loaded: ${e.message}`);
       }
+      // Load persisted tuning overrides so tuned params survive restarts.
+      const LOREKEEPER_TUNING = process.env.LOREKEEPER_TUNING_PATH || join(HOME, ".hermes", "lorekeeper", "tuning.json");
+      state.store.setTuningPath(LOREKEEPER_TUNING);
       // LLM shim: OpenRouter-compatible client so capture.mode="llm" and
       // LLM digests work. Reads OPENROUTER_API_KEY from the environment.
       const apiKey = process.env.OPENROUTER_API_KEY;

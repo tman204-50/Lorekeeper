@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, open, readFile, writeFile, readdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 // fuse.js import removed (0.2.2): replaced by the trigram index below.
 import { validateEpisodicRecord, validateEpisodicRecordArray } from "./types.js";
@@ -615,6 +615,57 @@ export class MemoryStore {
         const version = this.evalSetVersion + 1;
         this.evalSetVersion = version;
         log("info", `[store] eval set loaded: ${this.evalCases.length} cases (v${version})`);
+    }
+    // SELF_TUNING (Phase 7): persist promoted parameter values to disk so they
+    // survive service restarts. The tuning file is a JSON map of param → value.
+    setTuningPath(path) {
+        this._tuningPath = path;
+        if (path) this._loadTuning().catch((e) => log("warn", `[store] tuning load: ${e.message}`));
+    }
+    async _saveTuning() {
+        const path = this._tuningPath;
+        if (!path) return;
+        const snapshot = {};
+        for (const [key, p] of Object.entries(this.tunableParams)) {
+            snapshot[key] = p.value;
+        }
+        try {
+            await writeFile(path, JSON.stringify(snapshot, null, 2) + "\n", "utf-8");
+            log("info", `[tuning] params persisted to ${path}`);
+        } catch (e) {
+            log("warn", `[tuning] failed to persist: ${e.message}`);
+        }
+    }
+    async _loadTuning() {
+        const path = this._tuningPath;
+        if (!path) return;
+        try {
+            const raw = await readFile(path, "utf-8");
+            const data = JSON.parse(raw);
+            let loaded = 0;
+            for (const [key, value] of Object.entries(data)) {
+                const p = this.tunableParams[key];
+                if (p) {
+                    const clamped = Math.min(p.max, Math.max(p.min, Number(value)));
+                    if (Number.isFinite(clamped)) { p.value = clamped; loaded++; }
+                }
+            }
+            if (loaded > 0) log("info", `[tuning] loaded ${loaded} overrides from ${path}`);
+        } catch (e) {
+            // File not found or invalid — first boot or corrupt, both fine
+            if (!e.message?.includes?.("ENOENT")) log("warn", `[tuning] load skipped: ${e.message}`);
+        }
+    }
+    // Rollback: delete the tuning file so a service restart loads defaults.
+    async rollbackTuning() {
+        const path = this._tuningPath;
+        if (!path) return;
+        try {
+            await rm(path, { force: true });
+            log("info", "[tuning] rollback: deleted tuning override file");
+        } catch (e) {
+            log("warn", `[tuning] rollback failed: ${e.message}`);
+        }
     }
     // GRAPH_STORE_PHASE1: attach the offline entity graph for provenance
     // cleanup on memory removal/merge. Safe no-op if never attached.
@@ -3426,6 +3477,7 @@ export class MemoryStore {
             this._applyParams(bestParams);
             this.trialState.baseline = { mrr: bestMrr };
             this.trialState.consecutiveFailures = 0;
+            await this._saveTuning();
             log("info", `[trial] PROMOTED: MRR ${(this.trialState.baseline.mrr * 100).toFixed(1)}% (Δ +${(delta * 100).toFixed(1)}pp)`);
         } else {
             // Plateau: random walk one parameter
