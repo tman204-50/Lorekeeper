@@ -631,7 +631,44 @@ export class MemoryStore {
     // survive service restarts. The tuning file is a JSON map of param → value.
     setTuningPath(path) {
         this._tuningPath = path;
-        if (path) this._loadTuning().catch((e) => log("warn", `[store] tuning load: ${e.message}`));
+        // Persist trialState next to the tuning file so searchCalls survives restarts.
+        this._trialPath = path ? join(dirname(path), "trial-state.json") : null;
+        if (path) {
+            this._loadTuning().catch((e) => log("warn", `[store] tuning load: ${e.message}`));
+            this._loadTrialState().catch((e) => log("warn", `[store] trial-state load: ${e.message}`));
+        }
+    }
+    async _saveTrialState() {
+        const path = this._trialPath;
+        if (!path) return;
+        const snapshot = {
+            searchCalls: this.trialState?.searchCalls ?? 0,
+            lastTrialSearchCount: this.trialState?.lastTrialSearchCount ?? 0,
+            consecutiveFailures: this.trialState?.consecutiveFailures ?? 0,
+            baseline: this.trialState?.baseline ?? null,
+            bestParams: this.trialState?.bestParams ?? null,
+        };
+        try {
+            await writeFile(path, JSON.stringify(snapshot, null, 2) + "\n", "utf-8");
+        } catch (e) {
+            log("warn", `[trial-state] failed to persist: ${e.message}`);
+        }
+    }
+    async _loadTrialState() {
+        const path = this._trialPath;
+        if (!path) return;
+        try {
+            const raw = await readFile(path, "utf-8");
+            const data = JSON.parse(raw);
+            if (typeof data.searchCalls === "number" && data.searchCalls >= 0) this.trialState.searchCalls = data.searchCalls;
+            if (typeof data.lastTrialSearchCount === "number") this.trialState.lastTrialSearchCount = data.lastTrialSearchCount;
+            if (typeof data.consecutiveFailures === "number") this.trialState.consecutiveFailures = data.consecutiveFailures;
+            if (data.baseline && typeof data.baseline.mrr === "number") this.trialState.baseline = data.baseline;
+            if (data.bestParams) this.trialState.bestParams = data.bestParams;
+            log("info", `[trial-state] restored searchCalls=${this.trialState.searchCalls} from ${path}`);
+        } catch (e) {
+            if (!e.message?.includes?.("ENOENT")) log("warn", `[trial-state] load skipped: ${e.message}`);
+        }
     }
     async _saveTuning() {
         const path = this._tuningPath;
@@ -1003,6 +1040,7 @@ export class MemoryStore {
         if (!this.trialState) this.trialState = { searchCalls: 0, trialInterval: 500, lastTrialSearchCount: 0, baseline: null, bestParams: null, isRunning: false, consecutiveFailures: 0 };
         if (!this.tunableParams) this.tunableParams = DEFAULT_TUNABLE_PARAMS;
         this.trialState.searchCalls = (this.trialState.searchCalls ?? 0) + 1;
+        this._saveTrialState().catch(() => {});
         if (this.evalCases.length > 0 && !this.trialState.isRunning &&
             (this.trialState.searchCalls ?? 0) - (this.trialState.lastTrialSearchCount ?? 0) >= (this.trialState.trialInterval ?? 500)) {
             this._runTrial().catch((e) => log("warn", `[store] trial failed: ${e.message}`));
@@ -3459,6 +3497,7 @@ export class MemoryStore {
     async _runTrial() {
         this.trialState.isRunning = true;
         this.trialState.lastTrialSearchCount = this.trialState.searchCalls ?? 0;
+        this._saveTrialState().catch(() => {});
         const evalCases = this.evalCases;
         if (evalCases.length === 0) { this.trialState.isRunning = false; return; }
         const scope = "global";
@@ -3500,6 +3539,7 @@ export class MemoryStore {
             log("info", `[trial] plateau (best Δ ${(delta * 100).toFixed(2)}pp) — random walk, failures=${this.trialState.consecutiveFailures}`);
         }
         this.trialState.isRunning = false;
+        this._saveTrialState().catch(() => {});
     }
     _getLiveParams() {
         const p = this.tunableParams;
