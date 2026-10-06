@@ -231,3 +231,80 @@ commits d37ca71, 33254c4, 786713b, a7b5364 (Phase 6, Oct 5-6 2026):
       eval set proves the quality delta.
 - **Cross-path search cache (S3).** Remains parked; eval set gives it a
       testbed if http.search counts ever justify reviving.
+
+## Phase 7: Automated parameter explorer (spec, not started)
+
+Goal: the eval harness + feedback telemetry + scratch-store infrastructure
+exist. Phase 7 builds the orchestrator that turns them into a self-tuning
+loop — a weekly cron that tries candidate parameter combinations against
+the eval set and auto-promotes winners, gated by the MRR floor.
+
+### What's available (all ready):
+
+| Asset | Phase | Status |
+|-------|-------|--------|
+| Eval set (40 cases) + runner | 6a | Exits 1 on regression |
+| Scratch-store pattern | test/test_f234_fixes.mjs | Temp dir, mock embedder |
+| searchSignals counters | 6b | Visibility into channel activity |
+| Feedback stats per memory | 6b | helpful/unhelpful/wrong per ID |
+| D1 inferred signals | 6b | Task-episode success → feedback |
+| tripwire alert | 6b | lorekeeper eval-check |
+
+### Candidate tuning surfaces (all hand-set, all eval-measurable)
+
+1. **Retrieval weight grid** (`vectorWeight`, `bm25Weight`, `fuzzyWeight`,
+   `rrfK`). Every combination produces a different RRF merge. The eval
+   runner scores each one. Best candidate replaces the live config.
+
+2. **Recency half-life** (default 72h). Shorter = fresher results win harder;
+   longer = older important memories stay competitive. The searchSignals
+   counter shows how many records are being recency-boosted — tune to match
+   actual usage patterns.
+
+3. **Importance weight** (default 0.4) and per-category scaling. Feedback
+   stats already show per-category helpfulness rates. Auto-derive category
+   weights from the feedback signal: categories with high helpful rates get
+   a higher importance multiplier.
+
+4. **Feedback weight** (default 0.3). The channel is running but its
+   contribution to MRR is unknown. Grid-search 0.0–0.5 against the eval
+   set to find the point where it helps most.
+
+### Parameters out of scope for Phase 7
+- Capture thresholds (minCaptureChars, dedup writeThreshold) — deferred
+  behind D8, needs its own decision round.
+- Consolidation threshold (0.95) — has a false-positive rate from feedback
+  that could tune it, but the feedback signal is still thin (~50 events).
+
+### Build order (gated steps)
+
+**Step 1 — Config interface.** A JSON patch file or env-override mechanism
+that lets the explorer pass parameter values to the lorekeeper service
+without editing systemd unit files. `POST /config` endpoint or a persistent
+`~/.hermes/lorekeeper/override.json` that merges on init.
+
+**Step 2 — Explorer script.** `bin/lorekeeper param-explore <param-set>`:
+spins up a scratch store (temp dir, export/import from live), runs the
+eval runner against each candidate combination, reports the winner with
+its MRR delta over baseline.
+
+**Step 3 — Integration with live store.** The winner's parameter values are
+written to the override.json, the service is notified, and the eval runner
+is replayed against the live store for final confirmation. If it regresses,
+auto-revert.
+
+**Step 4 — Cron scheduling.** Weekly run (e.g. Sunday 2 AM), results logged,
+winners auto-promoted only if MRR exceeds baseline by ≥0.5%.
+Degradation (D7 path): revert and alert.
+
+### Acceptance criteria
+
+- [ ] `POST /config` or override.json mechanism live.
+- [ ] `bin/lorekeeper param-explore` exists and runs a scratch-store trial
+      in <5 min.
+- [ ] First candidate: weight-grid search (vector + bm25 + fuzzy + feedback
+      + rrfK). Reports winner with MRR before/after.
+- [ ] Live-store deployment: writes override, restarts service, re-runs
+      eval, holds baseline or better.
+- [ ] Weekly cron scheduled, degradation path wired to D7 tripwire.
+- [ ] Version bump + install.sh verification per standing rule.
