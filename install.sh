@@ -19,9 +19,11 @@
 set -euo pipefail
 
 PLUGIN_ONLY=0
+NO_RESTART_SERVE=0
 for arg in "$@"; do
   case "$arg" in
     --plugin-only|-u) PLUGIN_ONLY=1 ;;
+    --no-restart-serve) NO_RESTART_SERVE=1 ;;
     *) ;;
   esac
 done
@@ -76,6 +78,45 @@ verify_versions() {
 # Resolve this checkout (works when piped from curl or run from the repo).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
+# --- staleness guard -----------------------------------------------------------
+# STALENESS_GUARD (0.2.8): hermes-gateway AND hermes-serve import the plugin
+# once and cache it for the life of the process — a consumer left running from
+# before this install keeps serving the OLD client (the 2026-10-05 desktop
+# summarize/consolidate timeouts were exactly this: hermes-serve up since
+# Sep 29 with a 6-day-old client, invisible to gateway restarts).
+#   - hermes-serve is restarted automatically when stale (cheap; desktop
+#     webchat backend). Opt out with --no-restart-serve.
+#   - hermes-gateway is NEVER restarted automatically: a gateway restart
+#     kills every active hermes turn (including one running this script).
+#     Warn with the exact command instead.
+staleness_guard() {
+  # NOTE: the plugin DIR's mtime does not change when cp overwrites files in
+  # place — use plugin.yaml (copied on every install) as the install timestamp.
+  local installed_epoch
+  installed_epoch=$(stat -c %Y "$HERMES_HOME/plugins/lorekeeper/plugin.yaml" 2>/dev/null || date +%s)
+  if [ "$NO_RESTART_SERVE" != "1" ] && systemctl --user is-active --quiet hermes-serve 2>/dev/null; then
+    local serve_start
+    serve_start=$(date -d "$(systemctl --user show hermes-serve -p ActiveEnterTimestamp --value)" +%s 2>/dev/null || echo 0)
+    if [ "$serve_start" -gt 0 ] && [ "$serve_start" -lt "$installed_epoch" ]; then
+      systemctl --user restart hermes-serve
+      log "Restarted stale hermes-serve (started before this install) — desktop sessions now load the new client."
+    else
+      log "hermes-serve is fresh (started after this install)."
+    fi
+  fi
+  if systemctl --user is-active --quiet hermes-gateway 2>/dev/null; then
+    local gw_start
+    gw_start=$(date -d "$(systemctl --user show hermes-gateway -p ActiveEnterTimestamp --value)" +%s 2>/dev/null || echo 0)
+    if [ "$gw_start" -gt 0 ] && [ "$gw_start" -lt "$installed_epoch" ]; then
+      warn "hermes-gateway started BEFORE this install — it is still serving the old plugin import."
+      warn "  Restart it (kills active hermes sessions): systemctl --user restart hermes-gateway"
+      warn "  Verify afterwards: grep \"lorekeeper.client v\" /root/.hermes/logs/agent.log | tail -1"
+    else
+      log "hermes-gateway is fresh (started after this install)."
+    fi
+  fi
+}
+
 if [ "$PLUGIN_ONLY" -eq 1 ]; then
   log "Plugin-only update from $SCRIPT_DIR"
   verify_versions print
@@ -94,7 +135,8 @@ if [ "$PLUGIN_ONLY" -eq 1 ]; then
     warn "lorekeeper service not found via systemd — start it manually"
   fi
   verify_versions verify
-  log "Done. Restart the gateway (systemctl --user restart hermes-gateway) to load the refreshed provider."
+  staleness_guard
+  log "Done. (hermes-gateway restart reminder is issued by the staleness guard above when it is stale.)"
   exit 0
 fi
 
@@ -221,6 +263,7 @@ fi
 
 log ""
 verify_versions verify
+staleness_guard
 log "Done. Lorekeeper is installed and active."
 log "  Service : http://127.0.0.1:$PORT (token: $TOKEN_FILE)"
 log "  Plugin  : $PLUGIN_DIR"
