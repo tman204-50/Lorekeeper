@@ -232,43 +232,87 @@ commits d37ca71, 33254c4, 786713b, a7b5364 (Phase 6, Oct 5-6 2026):
 - **Cross-path search cache (S3).** Remains parked; eval set gives it a
       testbed if http.search counts ever justify reviving.
 
-## Phase 7: Automated parameter explorer (spec, not started)
+## Phase 7: Dynamic self-tuning (spec, not started — needs Todd's design decisions)
 
-Goal: the eval harness + feedback telemetry + scratch-store infrastructure
-exist. Phase 7 builds the orchestrator that turns them into a self-tuning
-loop — a weekly cron that tries candidate parameter combinations against
-the eval set and auto-promotes winners, gated by the MRR floor.
+**Core constraint (Todd, 2026-10-05):** no external scripts or cron jobs
+tweaking variables. The tuning must be built INTO the store system itself —
+the store observes its own performance and adjusts its parameters at runtime
+without an outside orchestrator.
 
-### What's available (all ready):
+### What this changes vs the initial Phase 7 draft
 
-| Asset | Phase | Status |
-|-------|-------|--------|
-| Eval set (40 cases) + runner | 6a | Exits 1 on regression |
-| Scratch-store pattern | test/test_f234_fixes.mjs | Temp dir, mock embedder |
-| searchSignals counters | 6b | Visibility into channel activity |
-| Feedback stats per memory | 6b | helpful/unhelpful/wrong per ID |
-| D1 inferred signals | 6b | Task-episode success → feedback |
-| tripwire alert | 6b | lorekeeper eval-check |
+The old draft assumed an external `bin/lorekeeper param-explore` cron script
+that grids parameters on a scratch store and promotes winners. That's dead.
+Instead, the store gains an internal feedback loop:
 
-### Candidate tuning surfaces (all hand-set, all eval-measurable)
+```
+Every search call →
+  accumulate metrics (MRR proxy, feedback stats, recency distribution) →
+  when enough signal accumulates →
+  run an in-process parameter trial →
+  if winner improves the eval score →
+  adopt it live
+```
 
-1. **Retrieval weight grid** (`vectorWeight`, `bm25Weight`, `fuzzyWeight`,
-   `rrfK`). Every combination produces a different RRF merge. The eval
-   runner scores each one. Best candidate replaces the live config.
+All inside the same Node process, no external scripts, no cron, no file edits.
 
-2. **Recency half-life** (default 72h). Shorter = fresher results win harder;
-   longer = older important memories stay competitive. The searchSignals
-   counter shows how many records are being recency-boosted — tune to match
-   actual usage patterns.
+### Design decisions (Todd, 2026-10-05)
 
-3. **Importance weight** (default 0.4) and per-category scaling. Feedback
-   stats already show per-category helpfulness rates. Auto-derive category
-   weights from the feedback signal: categories with high helpful rates get
-   a higher importance multiplier.
+**Q1 — Trigger.** After every N searches (default 5,000). Discrete lookback
+window; the store counts `searchSignals.calls` since the last trial and
+fires when it crosses the threshold.
 
-4. **Feedback weight** (default 0.3). The channel is running but its
-   contribution to MRR is unknown. Grid-search 0.0–0.5 against the eval
-   set to find the point where it helps most.
+**Q2 — Fitness.** The Phase 6 eval set (40 query→expected-id pairs). Same
+harness — compute MRR over the live store. No implicit metrics; only the
+eval set determines "better."
+
+**Q3 — Exploration strategy.** Grid search over fixed parameter combos.
+Enumerate the candidate space, score each against the eval set, pick the
+one with the highest MRR. Simpler to implement and audit than gradient or
+random sampling, and the eval runner already exists.
+
+**Q4 — Trial location.** Live store, same process. The eval runs against
+the production LanceDB (brief latency spike during the ~30s eval). No temp
+stores, no exports, no separate workers. The latency cost is bounded by the
+eval runner's existing runtime (~5s for 40 queries at ~20ms each).
+
+**Q5 — Promotion threshold.** Auto-accept if MRR improves ≥0.5% over the
+stored baseline. Smaller improvements are logged but not promoted.
+
+**Q6 — Termination.** Never stops. Even at plateau, random-walk every N
+searches (nudge one random weight by a small delta, eval, keep if better,
+revert if worse). Prevents lock-in to a local maximum.
+
+**Q7 — Safety bounds.** Per-parameter max delta: no weight can change by
+more than ±0.15 per trial. Hard min/max ranges per parameter also enforced:
+- `vectorWeight`: [0.3, 0.9]
+- `bm25Weight`: [0.1, 0.7]
+- `fuzzyWeight`: [0.0, 0.5]
+- `rrfK`: [10, 120]
+- `feedbackWeight`: [0.0, 0.5]
+- `recencyHalfLifeHours`: [24, 336]
+- `importanceWeight`: [0.0, 1.0]
+
+### Build plan (updated for in-store self-tuning)
+
+**Step 1 — Parameter registry.** A static config in `store.js` that lists
+tunable parameters with their current value, min, max, delta-limit, and a
+`trialWeight` flag (0 = never trial this one). Replaces the current
+env-var-only resolution with a runtime-mutable source of truth.
+
+**Step 2 — Trial scheduler.** In `_search`, after every N calls (gated by
+`searchSignals.calls` counter), schedule a trial:
+  1. Take a snapshot of current parameter values.
+  2. Generate candidate combos within the delta limits.
+  3. For each candidate: set parameters, run eval set queries, compute MRR.
+  4. If any candidate beats baseline by ≥0.5%, adopt the winning combo.
+  5. At plateau: random-walk one parameter by one step.
+  6. Restore parameters to live values after the trial (the eval queries
+     are read-only — no data changes).
+
+**Step 3 — Safety tripwire.** If the adopted parameter set later causes the
+D7 regression check to fire, the store auto-rolls back to the previous
+parameter set and doubles the trial interval (N × 2) before the next attempt.
 
 ### Parameters out of scope for Phase 7
 - Capture thresholds (minCaptureChars, dedup writeThreshold) — deferred
@@ -276,35 +320,15 @@ the eval set and auto-promotes winners, gated by the MRR floor.
 - Consolidation threshold (0.95) — has a false-positive rate from feedback
   that could tune it, but the feedback signal is still thin (~50 events).
 
-### Build order (gated steps)
-
-**Step 1 — Config interface.** A JSON patch file or env-override mechanism
-that lets the explorer pass parameter values to the lorekeeper service
-without editing systemd unit files. `POST /config` endpoint or a persistent
-`~/.hermes/lorekeeper/override.json` that merges on init.
-
-**Step 2 — Explorer script.** `bin/lorekeeper param-explore <param-set>`:
-spins up a scratch store (temp dir, export/import from live), runs the
-eval runner against each candidate combination, reports the winner with
-its MRR delta over baseline.
-
-**Step 3 — Integration with live store.** The winner's parameter values are
-written to the override.json, the service is notified, and the eval runner
-is replayed against the live store for final confirmation. If it regresses,
-auto-revert.
-
-**Step 4 — Cron scheduling.** Weekly run (e.g. Sunday 2 AM), results logged,
-winners auto-promoted only if MRR exceeds baseline by ≥0.5%.
-Degradation (D7 path): revert and alert.
-
 ### Acceptance criteria
 
-- [ ] `POST /config` or override.json mechanism live.
-- [ ] `bin/lorekeeper param-explore` exists and runs a scratch-store trial
-      in <5 min.
-- [ ] First candidate: weight-grid search (vector + bm25 + fuzzy + feedback
-      + rrfK). Reports winner with MRR before/after.
-- [ ] Live-store deployment: writes override, restarts service, re-runs
-      eval, holds baseline or better.
-- [ ] Weekly cron scheduled, degradation path wired to D7 tripwire.
-- [ ] Version bump + install.sh verification per standing rule.
+- [ ] Parameter registry live in store.js with all tunable values.
+- [ ] After 5,000 search calls, a trial runs automatically (verify by
+      watching `searchSignals` + eval set replay in logs).
+- [ ] Trial runs complete in <30s on the live store (no perceptible
+      degradation in concurrent search latency).
+- [ ] Grid search enumerates at least 9 combos across the candidate space.
+- [ ] ≥0.5% MRR improvement auto-promotes; <0.5% logs and skips.
+- [ ] Random walk on plateau: a different parameter nudged each trial.
+- [ ] Safety rollback fires on D7 regression.
+- [ ] No new external processes, scripts, or cron jobs required.
