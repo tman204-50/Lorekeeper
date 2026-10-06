@@ -1,0 +1,412 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "q": "lorekeper serice changed to trigram index",
+      "expect": [
+        "71bac372-45f"
+      ],
+      "tags": [
+        "typo",
+        "recall"
+      ]
+    },
+    {
+      "q": "how to refresh webull mcp token",
+      "expect": [
+        "9128299d-6dc"
+      ],
+      "tags": [
+        "exact",
+        "command"
+      ]
+    },
+    {
+      "q": "webull tokn refresh",
+      "expect": [
+        "9128299d-6dc"
+      ],
+      "tags": [
+        "typo",
+        "command"
+      ]
+    },
+    {
+      "q": "Todd's dog Ella pitsky 45 pounds",
+      "expect": [
+        "40da7878-fbe"
+      ],
+      "tags": [
+        "exact",
+        "profile"
+      ]
+    },
+    {
+      "q": "marantz virtual mode music receiver",
+      "expect": [
+        "f6ad9a89-3a3"
+      ],
+      "tags": [
+        "exact",
+        "preference"
+      ]
+    },
+    {
+      "q": "Chris Frank daily yo momma joke 10am",
+      "expect": [
+        "ov:2b18853b0"
+      ],
+      "tags": [
+        "exact",
+        "command"
+      ]
+    },
+    {
+      "q": "stop contacting me response brief acknowledgment",
+      "expect": [
+        "ov:0ebdafd71"
+      ],
+      "tags": [
+        "exact",
+        "learning"
+      ]
+    },
+    {
+      "q": "memoryLift KPI no data task episodes unwired",
+      "expect": [
+        "48f16efe-a80"
+      ],
+      "tags": [
+        "exact",
+        "fact"
+      ]
+    },
+    {
+      "q": "consolidate dryRun performance 43s to 3s",
+      "expect": [
+        "cce26adf-4dc"
+      ],
+      "tags": [
+        "exact",
+        "fact"
+      ]
+    },
+    {
+      "q": "glm flash primary cheapest strongest agentic",
+      "expect": [
+        "4cf67614-5fa"
+      ],
+      "tags": [
+        "exact",
+        "fact"
+      ]
+    },
+    {
+      "q": "injected memory 2200 chars lorekeeper holds everything",
+      "expect": [
+        "ed58de67-c07"
+      ],
+      "tags": [
+        "exact",
+        "fact"
+      ]
+    },
+    {
+      "q": "Todd birthday March 28 1976 Goldsboro",
+      "expect": [
+        "fe3d1fb4-021"
+      ],
+      "tags": [
+        "exact",
+        "profile"
+      ]
+    },
+    {
+      "q": "search mode hybrid missing fts not problem",
+      "expect": [
+        "db3a84db-8d8"
+      ],
+      "tags": [
+        "exact",
+        "fact"
+      ]
+    },
+    {
+      "q": "retrieval weights vector 0.7 bm25 0.3 fuzzy 0.15",
+      "expect": [
+        "3fbafd58-772"
+      ],
+      "tags": [
+        "exact",
+        "fact"
+      ]
+    },
+    {
+      "q": "firewall never directly modify no ssh opnsense hands off",
+      "expect": [
+        "ov:d0cf8a682"
+      ],
+      "tags": [
+        "exact",
+        "policy"
+      ]
+    },
+    {
+      "q": "Ella ball obsessed fetch dogs",
+      "expect": [
+        "52c723db-c89"
+      ],
+      "tags": [
+        "exact",
+        "profile"
+      ]
+    },
+    {
+      "q": "Nina Simone wedding song If I Should Lose You",
+      "expect": [
+        "3770bdeb-969"
+      ],
+      "tags": [
+        "exact",
+        "profile"
+      ]
+    },
+    {
+      "q": "favorite color green Todd",
+      "expect": [
+        "380e0fc2-9ca"
+      ],
+      "tags": [
+        "exact",
+        "profile"
+      ]
+    },
+    {
+      "q": "bacon BOGO watch chicken markdown price",
+      "expect": [
+        "6511ea57-cf9"
+      ],
+      "tags": [
+        "exact",
+        "preference"
+      ]
+    },
+    {
+      "q": "Alex 16 Apple Valley high school IEP",
+      "expect": [
+        "fe3d1fb4-021"
+      ],
+      "tags": [
+        "exact",
+        "family"
+      ]
+    },
+    {
+      "q": "Anne named morning check-in empty automated impersonal",
+      "expect": [
+        "ov:4fbfa7329"
+      ],
+      "tags": [
+        "exact",
+        "learning"
+      ]
+    },
+    {
+      "q": "BGXXQ corpse of bright green permanent reminder",
+      "expect": [
+        "4e5b87de-e37"
+      ],
+      "tags": [
+        "exact",
+        "learning",
+        "relaxed"
+      ]
+    },
+    {
+      "q": "graph expansion BFS turned off hurt MRR",
+      "expect": [
+        "a0cc9766-adf"
+      ],
+      "tags": [
+        "exact",
+        "fact"
+      ]
+    },
+    {
+      "q": "session cron openclaw sessions cleanup enforce",
+      "expect": [
+        "51530106-652"
+      ],
+      "tags": [
+        "exact",
+        "command"
+      ]
+    },
+    {
+      "q": "war chest SGOV 40 percent deployment triggers VIX",
+      "expect": [
+        "ov:7653ab216"
+      ],
+      "tags": [
+        "exact",
+        "trading"
+      ]
+    },
+    {
+      "q": "code alias deepseek v4 flash default coding model",
+      "expect": [
+        "5ff7d37e-448"
+      ],
+      "tags": [
+        "exact",
+        "fact"
+      ]
+    },
+    {
+      "q": "openclaw cron session prune daily 3am",
+      "expect": [
+        "51530106-652"
+      ],
+      "tags": [
+        "paraphrase",
+        "command"
+      ]
+    },
+    {
+      "q": "how do I switch my memory search engine",
+      "expect": [
+        "a1c2e6a6-bdc"
+      ],
+      "tags": [
+        "paraphrase",
+        "recall"
+      ]
+    },
+    {
+      "q": "what model should I use for coding work",
+      "expect": [
+        "37391c08-dc7"
+      ],
+      "tags": [
+        "paraphrase",
+        "preference"
+      ]
+    },
+    {
+      "q": "50 dollar AI budget monthly floor 10",
+      "expect": [
+        "83436c22-d6f"
+      ],
+      "tags": [
+        "exact",
+        "preference"
+      ]
+    },
+    {
+      "q": "what color does Todd like most",
+      "expect": [
+        "ov:c4b62ee8e"
+      ],
+      "tags": [
+        "exact",
+        "profile",
+        "negative",
+        "380e0fc2-9ca"
+      ]
+    },
+    {
+      "q": "Ella dog breed",
+      "expect": [
+        "40da7878-fbe"
+      ],
+      "tags": [
+        "exact",
+        "profile"
+      ]
+    },
+    {
+      "q": "Ella 45 pounds pitsky",
+      "expect": [
+        "40da7878-fbe"
+      ],
+      "tags": [
+        "paraphrase",
+        "profile"
+      ]
+    },
+    {
+      "q": "how to install lorekeeper on a new box",
+      "expect": [
+        "e61aff4c-4cd"
+      ],
+      "tags": [
+        "exact",
+        "command",
+        "relaxed"
+      ]
+    },
+    {
+      "q": "lorekeeper install sequence",
+      "expect": [
+        "e61aff4c-4cd"
+      ],
+      "tags": [
+        "paraphrase",
+        "command",
+        "relaxed"
+      ]
+    },
+    {
+      "q": "lancedb path",
+      "expect": [
+        "2f5c75e5-a96"
+      ],
+      "tags": [
+        "exact",
+        "fact"
+      ]
+    },
+    {
+      "q": "lancedb 61 MB",
+      "expect": [
+        "2f5c75e5-a96"
+      ],
+      "tags": [
+        "exact",
+        "fact"
+      ]
+    },
+    {
+      "q": "prefer walmart everstart batteries",
+      "expect": [
+        "c5ba8d37-6e2"
+      ],
+      "tags": [
+        "exact",
+        "preference",
+        "relaxed"
+      ]
+    },
+    {
+      "q": "Todd",
+      "expect": [
+        "ebdaffd0-0c3"
+      ],
+      "tags": [
+        "exact",
+        "profile",
+        "relaxed"
+      ]
+    },
+    {
+      "q": "Dunk speaks in knight medieval metaphors",
+      "expect": [
+        "ov:e25cccf14"
+      ],
+      "tags": [
+        "exact",
+        "profile"
+      ]
+    }
+  ]
+}
