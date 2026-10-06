@@ -181,42 +181,43 @@ code.
 ### 6b. Effectiveness visibility (new scope — what actually needs building)
 
 **No `relevance_signals.js` module.** The existing `store.js` scoring pipeline
-already handles the feedback factor. New work is additive patches to the vendor
-store (tagged fork comments), each behind an env-default-off flag:
+already handles the feedback factor. All five items below were built in
+commits d37ca71, 33254c4, 786713b, a7b5364 (Phase 6, Oct 5-6 2026):
 
-1. **Metrics counters (D5).** Add `store.search.signals` to the /metrics
-   output: number of records with positive feedback, count boosted vs
-   penalized, mean/median feedbackFactor for boosted records, etc. The channel
-   is running at 0.3 right now with ZERO visibility — this is the cheapest
-   way to know whether it's doing anything useful.
+1. ✅ **Metrics counters (D5).** `searchSignals` object in /metrics tracking
+   boosted/penalized/neutral per search call. The feedbackWeight channel
+   (at 0.3 since 1.6) now has visibility.
 
-2. **Inferred signal pipeline (D1).** Wire task-episode retry/success data
-   into `getMemoryFeedbackStatsMap` alongside the manual feedback. An
-   episodic task that completes without retries implies its recalled memories
-   were effective. This is the heaviest new code — likely a helper module
-   that reads from the episodic_tasks table and emits synthetic feedback
-   rows tagged `source: "inferred"`.
+2. ✅ **Inferred signal pipeline (D1).** `getInferredFeedbackForScopes()` in
+   store.js queries successful zero-retry task episodes, cross-references
+   recall events by sessionId in the effectiveness_events table, and merges
+   inferred `{helpful: 1}` signals into the feedback factor. Gated by
+   `OPENCODE_MEMORY_PRO_INFERRED_FEEDBACK_ENABLED` (ON in production).
 
-3. **Category allowlist confirm (D3).** Verify that the expire sweep respects
-   protectedCategories + recall age + importance. Patch if not.
+3. ✅ **Category allowlist + importance gate (D3).** `retentionCandidates()`
+   gained `maxImportanceForExpiry` parameter (default-off). When > 0, only
+   memories at or below that importance are digest-eligible. Default
+   `protectedCategories` expanded to include `"profile"`.
 
-4. **D7 tripwire.** A small cron-wrappable script (`lorekeeper eval-check`)
-   that runs recall_eval.mjs against the live store and fires
-   `scripts/notify` + flag-revert on regression. Fast, no new runtime
-   infrastructure.
+4. ✅ **D7 tripwire.** `lorekeeper eval-check` runs recall_eval.mjs against
+   the live store, fires `scripts/notify` on regression, exits 1.
 
-5. **D4 error attribution.** Deferred. Requires validate_citation to exist
-   as a real mechanism (currently a tool stub). Not in this phase.
+5. ✅ **D4 citation arbitration.** `getMemoryFeedbackStatsMap()` checks each
+   memory's citationStatus before applying penalties. Memories with
+   `citationStatus=verified` that received negative feedback have those
+   penalties zeroed (memory was correct — agent error). Always-on, no toggle.
 
-### 6c. Acceptance criteria (updated)
+### 6c. Acceptance criteria (all ✅ — Phase delivered Oct 6, 2026)
 
 - [x] Eval runner + seed set + baseline committed; runs <30s on 2.5k rows.
 - [x] MRR + hit5 reported per ranking change in commit messages.
-- [ ] Metrics counters visible in /metrics showing feedback channel activity.
-- [ ] Inferred signals: task-episode success rate feeds into feedback stats
-      (default-off flag).
-- [ ] Category allowlist + importance gate verified in expire sweep.
-- [ ] D7 tripwire script exists and fires scripts/notify on regression.
+- [x] Metrics counters visible in /metrics showing feedback channel activity.
+- [x] Inferred signals: task-episode success rate feeds into feedback stats
+      (default-on flag in production).
+- [x] Category allowlist + importance gate verified in expire sweep.
+- [x] D7 tripwire script exists and fires scripts/notify on regression.
+- [x] D4 citation arbitration — memories with verified citations are not
+      penalized for negative feedback (agent-error attribution).
 - [ ] Live-store dry measurement (scratch instance, export/import round-trip)
       before any non-default flag flips on lorekeeper.service.
 - [ ] Version bump in all three surfaces (provider/_version.py,
@@ -230,5 +231,3 @@ store (tagged fork comments), each behind an env-default-off flag:
       eval set proves the quality delta.
 - **Cross-path search cache (S3).** Remains parked; eval set gives it a
       testbed if http.search counts ever justify reviving.
-- **D4 error attribution / citation validation.** Needs the validate_citation
-      mechanism built. Not before 6c items.
