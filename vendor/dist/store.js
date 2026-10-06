@@ -3337,7 +3337,7 @@ export class MemoryStore {
         // outcomes when enabled. The bridging heuristic between task episodes
         // and specific memory IDs requires session→memory tracking not yet
         // built; this hook is the architecture placeholder.
-        const inferredEnabled = envBool("OPENCODE_MEMORY_PRO_INFERRED_FEEDBACK_ENABLED", false);
+        const inferredEnabled = String(process.env.OPENCODE_MEMORY_PRO_INFERRED_FEEDBACK_ENABLED ?? "").toLowerCase() === "true";
         if (inferredEnabled) {
             const inferred = await this.getInferredFeedbackForScopes(scopes, memoryIds);
             for (const [memoryId, iStats] of inferred) {
