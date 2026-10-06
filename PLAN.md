@@ -258,7 +258,7 @@ All inside the same Node process, no external scripts, no cron, no file edits.
 
 ### Design decisions (Todd, 2026-10-05)
 
-**Q1 — Trigger.** After every N searches (default 5,000). Discrete lookback
+**Q1 — Trigger.** After every N searches (default 500). Discrete lookback
 window; the store counts `searchSignals.calls` since the last trial and
 fires when it crosses the threshold.
 
@@ -312,7 +312,7 @@ env-var-only resolution with a runtime-mutable source of truth.
 
 **Step 3 — Safety tripwire.** If the adopted parameter set later causes the
 D7 regression check to fire, the store auto-rolls back to the previous
-parameter set and doubles the trial interval (N × 2) before the next attempt.
+parameter set and doubles the trial interval (N × 2, so 500 → 1,000 → 2,000) before the next attempt.
 
 ### Parameters out of scope for Phase 7
 - Capture thresholds (minCaptureChars, dedup writeThreshold) — deferred
@@ -323,7 +323,7 @@ parameter set and doubles the trial interval (N × 2) before the next attempt.
 ### Acceptance criteria
 
 - [ ] Parameter registry live in store.js with all tunable values.
-- [ ] After 5,000 search calls, a trial runs automatically (verify by
+- [ ] Every ~500 search calls, a trial runs automatically (verify by
       watching `searchSignals` + eval set replay in logs).
 - [ ] Trial runs complete in <30s on the live store (no perceptible
       degradation in concurrent search latency).
