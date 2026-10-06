@@ -90,10 +90,31 @@ async function cmdInstall() {
 
 const args = process.argv.slice(1).filter((a) => !a.endsWith("bin/lorekeeper") && !a.endsWith("lorekeeper"));
 const cmd = args[0] || "serve";
-const table = { serve: cmdServe, status: cmdStatus, init: cmdInit, install: cmdInstall };
+const table = { serve: cmdServe, status: cmdStatus, init: cmdInit, install: cmdInstall, evalCheck: cmdEvalCheck };
 if (!table[cmd]) {
   console.error(`unknown command: ${cmd}`);
-  console.error("usage: lorekeeper <serve|status|init|install>");
+  console.error("usage: lorekeeper <serve|status|init|install|eval-check>");
   process.exit(2);
 }
 await table[cmd]();
+
+// ── eval-check (D7 tripwire) ─────────────────────────────
+async function cmdEvalCheck() {
+  // Run the eval runner, compare against stored baseline.
+  // If MRR or top-5 hit regresses, exit 1 (alert caller).
+  // Usage: LOREKEEPER_NOTIFY_SCRIPT=/path/to/notify lorekeeper eval-check
+  const evalMjs = join(ROOT, "test", "recall_eval.mjs");
+  const nootify = process.env.LOREKEEPER_NOTIFY_SCRIPT || "/root/.hermes/workspace/scripts/notify";
+  console.log(`[eval-check] running ${evalMjs}...`);
+  const proc = spawn(process.execPath, [evalMjs], { stdio: ["pipe", "inherit", "inherit"] });
+  const code = await new Promise((resolve) => { proc.on("exit", resolve); });
+  if (code !== 0) {
+    console.log(`[eval-check] REGRESSION DETECTED (exit ${code})`);
+    // Fire notification
+    const notifyProc = spawn(process.execPath, [nootify, "lorekeeper eval-check: MRR regression detected — auto-revert needed"]);
+    console.log(`[eval-check] alert sent`);
+    process.exit(1);
+  }
+  console.log(`[eval-check] Baseline holds.`);
+  process.exit(0);
+}

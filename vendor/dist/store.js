@@ -558,6 +558,10 @@ export class MemoryStore {
         this.eventTable = null;
         this.episodicTaskTable = null;
         this.episodicTaskTablePromise = null;
+        // SEARCH_SIGNALS (0.2.11): per-call counters for the feedbackWeight
+        // channel — visibility into a channel that's been running blind since 1.6.
+        // Exposed via /metrics; reset on each read.
+        this.searchSignals = { calls: 0, boosted: 0, penalized: 0, neutral: 0 };
         this.lancedb = null;
     }
     retentionConfig;
@@ -871,6 +875,14 @@ export class MemoryStore {
             const feedbackFactor = feedbackWeight > 0 && feedbackStats
                 ? 1 + feedbackWeight * (feedbackStats.feedbackFactor - 1)
                 : 1;
+            // SEARCH_SIGNALS (0.2.11): track how feedbackWeight channel
+            // distributes across records — blind since 1.6.
+            if (feedbackWeight > 0) {
+                if (feedbackFactor > 1.01) this.searchSignals.boosted++;
+                else if (feedbackFactor < 0.99) this.searchSignals.penalized++;
+                else this.searchSignals.neutral++;
+                this.searchSignals.calls++;
+            }
             const score = rrfScore * recencyFactor * importanceFactor * scopeFactor * feedbackFactor;
             return {
                 record: item.record,
@@ -3285,6 +3297,24 @@ export class MemoryStore {
             }
         }
     }
+    // INFERRED_FEEDBACK (0.2.11, D1): query the episodic_tasks table for
+    // recent successful non-retried tasks and derive implied memory feedback.
+    // The session→memory bridging heuristic is a placeholder — returns empty
+    // until the mapping exists (episodic tasks carry sessionId, which could
+    // cross-reference memory recall events from the same session).
+    // Env: OPENCODE_MEMORY_PRO_INFERRED_FEEDBACK_ENABLED=true
+    async getInferredFeedbackForScopes(scopes, memoryIds) {
+        // PLACEHOLDER: return empty until session→memory bridging is built.
+        // Future implementation outline:
+        //   const HOURS = 24;
+        //   const recent = await this.queryTaskEpisodes(scopes[0], "success", Date.now() - HOURS * 3600_000);
+        //   for (const ep of recent) {
+        //     if (ep.retryAttemptsJson && JSON.parse(ep.retryAttemptsJson).length > 0) continue;
+        //     // Cross-reference ep.sessionId against recall events in the
+        //     // effectiveness_events table to find affected memory IDs.
+        //   }
+        return new Map();
+    }
     async getMemoryFeedbackStatsMap(memoryIds, scopes) {
         const feedbackStats = new Map();
         if (memoryIds.length === 0 || scopes.length === 0)
@@ -3300,6 +3330,21 @@ export class MemoryStore {
                 totals.helpful += stats.helpful;
                 totals.unhelpful += stats.unhelpful;
                 totals.wrong += stats.wrong;
+                rawTotals.set(memoryId, totals);
+            }
+        }
+        // INFERRED_FEEDBACK (0.2.11, D1): merge signals from episodic task
+        // outcomes when enabled. The bridging heuristic between task episodes
+        // and specific memory IDs requires session→memory tracking not yet
+        // built; this hook is the architecture placeholder.
+        const inferredEnabled = envBool("OPENCODE_MEMORY_PRO_INFERRED_FEEDBACK_ENABLED", false);
+        if (inferredEnabled) {
+            const inferred = await this.getInferredFeedbackForScopes(scopes, memoryIds);
+            for (const [memoryId, iStats] of inferred) {
+                if (!idSet.has(memoryId)) continue;
+                const totals = rawTotals.get(memoryId) ?? { helpful: 0, unhelpful: 0, wrong: 0 };
+                totals.helpful += iStats.helpful;
+                totals.unhelpful += iStats.unhelpful;
                 rawTotals.set(memoryId, totals);
             }
         }
@@ -4303,7 +4348,8 @@ export function extractiveDigest(texts, targetChars = 500, entityNames = [], sou
 // expiry sweep. A memory is expired when ALL of:
 //   - status is unset/"active" (never disabled/merged/digested)
 //   - category is not protected (default: "digest") and metadataJson.pinned !== true
-//   - importance >= minImportance
+//   - importance meets the gate: importance >= minImportance (legacy); when
+//     maxImportanceForExpiry > 0: importance <= maxImportanceForExpiry (D3)
 //   - older than minAgeDays AND unused for unusedDays, where "unused" is
 //     measured from lastRecalled, or from timestamp when never recalled
 //     (so junk that was never surfaced IS expirable — unlike getUnusedGlobalMemories).
@@ -4311,10 +4357,11 @@ export function retentionCandidates(records, opts = {}) {
     const unusedDays = Math.max(1, Number(opts.unusedDays ?? 60));
     const minAgeDays = Math.max(1, Number(opts.minAgeDays ?? 180));
     const minImportance = Number(opts.minImportance ?? 0);
+    const maxImportanceForExpiry = Number(opts.maxImportanceForExpiry ?? 0);
     const rawProtected = opts.protectedCategories;
     const protectedCategories = new Set(Array.isArray(rawProtected)
         ? rawProtected.filter((c) => typeof c === "string")
-        : (typeof rawProtected === "string" ? [rawProtected] : ["digest"]));
+        : (typeof rawProtected === "string" ? [rawProtected] : ["digest", "profile"]));
     const DAY_MS = 24 * 60 * 60 * 1000;
     const now = Date.now();
     const ageCutoff = now - minAgeDays * DAY_MS;
@@ -4329,6 +4376,8 @@ export function retentionCandidates(records, opts = {}) {
             return false;
         const importance = Number(r.importance ?? 0);
         if (importance < minImportance)
+            return false;
+        if (maxImportanceForExpiry > 0 && importance > maxImportanceForExpiry)
             return false;
         const lastRecalled = Number(r.lastRecalled ?? 0);
         const lastUse = lastRecalled > 0 ? lastRecalled : timestamp;

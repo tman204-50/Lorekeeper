@@ -672,6 +672,7 @@ const handlers = {
       version: SERVICE_VERSION,
       timing: getTimingStats(),
       scopeCache: state.store?.cacheStats ?? null,
+      searchSignals: state.store?.searchSignals ?? null,
       process: {
         rssKib: Math.round(mem.rss / 1024),
         heapUsedKib: Math.round(mem.heapUsed / 1024),
