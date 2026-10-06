@@ -3299,22 +3299,50 @@ export class MemoryStore {
         }
     }
     // INFERRED_FEEDBACK (0.2.11, D1): query the episodic_tasks table for
-    // recent successful non-retried tasks and derive implied memory feedback.
-    // The session→memory bridging heuristic is a placeholder — returns empty
-    // until the mapping exists (episodic tasks carry sessionId, which could
-    // cross-reference memory recall events from the same session).
+    // recent successful non-retried tasks and cross-reference recall events
+    // in the effectiveness_events table by sessionID. Memories that were
+    // recalled during successful task episodes get an inferred helpful signal.
     // Env: OPENCODE_MEMORY_PRO_INFERRED_FEEDBACK_ENABLED=true
     async getInferredFeedbackForScopes(scopes, memoryIds) {
-        // PLACEHOLDER: return empty until session→memory bridging is built.
-        // Future implementation outline:
-        //   const HOURS = 24;
-        //   const recent = await this.queryTaskEpisodes(scopes[0], "success", Date.now() - HOURS * 3600_000);
-        //   for (const ep of recent) {
-        //     if (ep.retryAttemptsJson && JSON.parse(ep.retryAttemptsJson).length > 0) continue;
-        //     // Cross-reference ep.sessionId against recall events in the
-        //     // effectiveness_events table to find affected memory IDs.
-        //   }
-        return new Map();
+        const inferred = new Map();
+        if (scopes.length === 0 || memoryIds.length === 0) return inferred;
+        const scope = scopes[0];
+        const HOURS = 24;
+        const since = Date.now() - HOURS * 3600_000;
+        try {
+            const episodes = await this.queryTaskEpisodes(scope, "success", since);
+            for (const ep of episodes) {
+                const sessionId = ep.sessionId ?? "";
+                if (!sessionId) continue;
+                // Skip episodes with retries (D1: zero-retry tasks are the
+                // strongest signal of effective recall)
+                let retries = [];
+                try {
+                    retries = JSON.parse(ep.retryAttemptsJson ?? "[]");
+                } catch { retries = []; }
+                if (retries.length > 0) continue;
+                const startTime = Number(ep.startTime ?? 0);
+                const endTime = Number(ep.endTime ?? 0);
+                if (startTime <= 0) continue;
+                const table = this.requireEventTable();
+                const eventRows = await table
+                    .query()
+                    .where(`sessionID = '${escapeSql(sessionId)}' AND type = 'recall' AND memoryId != ''`)
+                    .toArray();
+                for (const row of eventRows) {
+                    const ts = Number(row.timestamp ?? 0);
+                    if (endTime > 0 && (ts < startTime || ts > endTime)) continue;
+                    const mid = row.memoryId;
+                    if (!mid || !memoryIds.includes(mid)) continue;
+                    const cur = inferred.get(mid) ?? { helpful: 0, unhelpful: 0 };
+                    cur.helpful += 1;
+                    inferred.set(mid, cur);
+                }
+            }
+        } catch (e) {
+            log("warn", `[store] getInferredFeedbackForScopes failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        return inferred;
     }
     async getMemoryFeedbackStatsMap(memoryIds, scopes) {
         const feedbackStats = new Map();
@@ -3347,6 +3375,25 @@ export class MemoryStore {
                 totals.helpful += iStats.helpful;
                 totals.unhelpful += iStats.unhelpful;
                 rawTotals.set(memoryId, totals);
+            }
+        }
+        // D4_CITATION_ARBITRATION: before computing the feedback factor, check
+        // each memory with negative feedback against its citation status.
+        // Verified citations mean the memory was correct — any negative feedback
+        // is an agent error, not a memory error, and should not penalize.
+        const citationMap = new Map();
+        try {
+            const allRecords = await this.readByScopesIncludingMerged(scopes);
+            for (const rec of allRecords) {
+                if (rec.citationStatus) citationMap.set(rec.id, rec.citationStatus);
+            }
+        } catch { /* proceed without citation arbitration */ }
+        for (const [memoryId, stats] of rawTotals) {
+            const citationStatus = citationMap.get(memoryId) ?? "";
+            if (citationStatus === "verified") {
+                // Memory was correct — agent error. Zero the penalties.
+                stats.wrong = 0;
+                stats.unhelpful = 0;
             }
         }
         // Calculate feedback factor for each memory
