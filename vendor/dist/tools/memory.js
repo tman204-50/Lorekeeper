@@ -64,6 +64,35 @@ export async function buildGroupDigest(state, group, targetChars, groupKey, enti
     const digest = extractiveDigest(texts, targetChars, Array.from(entityNames ?? []), groupKey);
     return digest ? { ...digest, llm: false } : null;
 }
+// DIGEST_FEEDBACK_EVENT (0.2.7): digest creation used to be a silent put —
+// the events stream (effectiveness metrics) never recorded that memories were
+// folded away, so the agent's mental model of its own memory drifted after
+// every summarize/expire run. Emit a capture event with outcome "digest"
+// (summarizeEvents/aggregateEvents count it under capture.digests). Failure
+// to record the event must never fail the digest itself.
+async function emitDigestEvent(state, { scope, sessionID, digestId, group, absorbed, digestText, digestMode }) {
+    try {
+        await state.store.putEvent({
+            id: generateId(),
+            type: "capture",
+            scope,
+            sessionID: sessionID ?? "",
+            timestamp: Date.now(),
+            outcome: "digest",
+            memoryId: digestId,
+            text: digestText,
+            metadataJson: JSON.stringify({
+                source: "digest",
+                group: group ?? null,
+                absorbed: absorbed ?? null,
+                digestMode: digestMode ?? "extractive",
+            }),
+        });
+    }
+    catch (error) {
+        log("warn", `[digest] event emission failed for "${group ?? "memories"}": ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
 // DIGEST_SCOPE_FOLLOWS_MEMBERS (1.6.1): with scoping="project" +
 // includeGlobalScope, a digest group can mix active-scope and global
 // records. The digest must live where EVERY member is visible: if any
@@ -1593,6 +1622,15 @@ ${explanations.join("\n")}`;
                         catch {
                         }
                     }
+                    await emitDigestEvent(state, {
+                        scope: digestScopeForGroup(group, activeScope),
+                        sessionID: context.sessionID,
+                        digestId,
+                        group: groupKey,
+                        absorbed: digest?.sourceCount ?? group.length,
+                        digestText,
+                        digestMode: digest?.llm ? "llm" : "extractive",
+                    });
                     let digested = 0;
                     if (replace) {
                         digested = await state.store.markDigested(ids, digestId, scopes);
@@ -1823,6 +1861,15 @@ export async function sweepExpiredMemories(state, opts = {}) {
             const digested = await state.store.markDigested(ids, digestId, scopes);
             digestedTotal += digested;
             created.push({ digestId, group: groupKey, absorbed: digest?.sourceCount ?? group.length, digested, digestChars: digestText.length });
+            await emitDigestEvent(state, {
+                scope: digestScopeForGroup(group, activeScope),
+                sessionID: opts.sessionID,
+                digestId,
+                group: groupKey,
+                absorbed: digest?.sourceCount ?? group.length,
+                digestText,
+                digestMode: digest?.llm ? "llm" : "extractive",
+            });
         }
         catch (error) {
             log("warn", `[retention] digest creation failed for "${groupKey}": ${error instanceof Error ? error.message : String(error)}`);

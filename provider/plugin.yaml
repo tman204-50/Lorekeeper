@@ -1,5 +1,5 @@
 name: lorekeeper
-version: 0.2.6
+version: 0.2.7
 description: "Lorekeeper — local LanceDB long-term memory (vector + BM25 hybrid, entity graph) via the Node service. Self-contained fork of opencode-memory-pro."
 # The lorekeeper_* client tools. Declaring them here is what asks discovery to
 # import `tools.py` in CLI/TUI processes, where the plugin is otherwise deferred

@@ -1255,8 +1255,8 @@ export class MemoryStore {
                             const mergedIntoId = newer.id;
                             const updatedOlderMeta = { status: "merged", mergedInto: mergedIntoId };
                             // CONSOLIDATE_WRITE_BATCHING (1.5.8): was one
-                            // table.update() per row (2 commits per merge, up to
-                            // 1350 commits for 675 merges → 126s). Both sides are
+                            // table.update() per row (2 commits per merge, up
+                            // to 1350 commits for 675 merges → 126s). Both sides are
                             // now staged and flushed at the end of the run so a
                             // row touched by both a merge and a flag-clear
                             // commits exactly once (see flushConsolidationWrites;
@@ -1267,6 +1267,17 @@ export class MemoryStore {
                                 metadataJson: JSON.stringify({ ...parseMetadata(older.metadataJson), ...updatedOlderMeta }),
                             });
                             const updatedNewerMeta = { ...newerMeta, mergedFrom: older.id };
+                            // MERGE_TEXT_STASH (0.2.7): the absorbed row leaves
+                            // recall (status "merged") and its unique wording
+                            // with it — near-dup is not exact-dup. Stash a
+                            // bounded copy of the absorbed text in the
+                            // survivor's metadata so nothing is recoverable
+                            // only by DB surgery. Bounded: 800 chars per
+                            // entry, last 10 merges per survivor.
+                            updatedNewerMeta.mergedTexts = [
+                                ...(newerMeta.mergedTexts ?? []),
+                                { id: older.id, text: older.text.slice(0, 800), mergedAt: now },
+                            ].slice(-10);
                             this.stageConsolidationWrite(newer.id, {
                                 metadataJson: JSON.stringify(updatedNewerMeta),
                             });
@@ -1357,6 +1368,11 @@ export class MemoryStore {
                         metadataJson: JSON.stringify({ ...parseMetadata(older.metadataJson), ...updatedOlderMeta }),
                     });
                     const updatedNewerMeta = { ...newerMeta, mergedFrom: older.id };
+                    // MERGE_TEXT_STASH (0.2.7): see ANN path.
+                    updatedNewerMeta.mergedTexts = [
+                        ...(newerMeta.mergedTexts ?? []),
+                        { id: older.id, text: older.text.slice(0, 800), mergedAt: now },
+                    ].slice(-10);
                     this.stageConsolidationWrite(newer.id, {
                         metadataJson: JSON.stringify(updatedNewerMeta),
                     });
@@ -2063,6 +2079,10 @@ export class MemoryStore {
         let captureConsidered = 0;
         let captureStored = 0;
         let captureSkipped = 0;
+        // DIGEST_FEEDBACK_EVENT (0.2.7): digest creation now emits a capture
+        // event with outcome "digest" so the effectiveness surface reflects
+        // how much memory was folded away (and where).
+        let captureDigests = 0;
         let recallRequested = 0;
         let recallInjected = 0;
         let recallReturnedResults = 0;
@@ -2081,6 +2101,8 @@ export class MemoryStore {
                     captureConsidered += 1;
                 if (event.outcome === "stored")
                     captureStored += 1;
+                if (event.outcome === "digest")
+                    captureDigests += 1;
                 if (event.outcome === "skipped") {
                     captureSkipped += 1;
                     if (event.skipReason) {
@@ -2139,6 +2161,7 @@ export class MemoryStore {
                 considered: captureConsidered,
                 stored: captureStored,
                 skipped: captureSkipped,
+                digests: captureDigests,
                 successRate: totalCaptureAttempts === 0 ? 0 : captureStored / totalCaptureAttempts,
                 skipReasons: captureSkipReasons,
             },
@@ -2231,6 +2254,9 @@ export class MemoryStore {
         let captureConsidered = 0;
         let captureStored = 0;
         let captureSkipped = 0;
+        // DIGEST_FEEDBACK_EVENT (0.2.7): mirror summarizeEvents' digest counter
+        // so the KPI weekly view sees digest activity too.
+        let captureDigests = 0;
         let recallRequested = 0;
         let recallInjected = 0;
         let recallReturnedResults = 0;
@@ -2249,6 +2275,8 @@ export class MemoryStore {
                     captureConsidered += 1;
                 if (event.outcome === "stored")
                     captureStored += 1;
+                if (event.outcome === "digest")
+                    captureDigests += 1;
                 if (event.outcome === "skipped") {
                     captureSkipped += 1;
                     if (event.skipReason) {
@@ -2306,6 +2334,7 @@ export class MemoryStore {
                 considered: captureConsidered,
                 stored: captureStored,
                 skipped: captureSkipped,
+                digests: captureDigests,
                 successRate: totalCaptureAttempts === 0 ? 0 : captureStored / totalCaptureAttempts,
                 skipReasons: captureSkipReasons,
             },
@@ -3921,7 +3950,11 @@ function normalizeEventRow(row) {
         return {
             ...base,
             type: "capture",
-            outcome: row.outcome === "stored" || row.outcome === "skipped" ? row.outcome : "considered",
+            // DIGEST_FEEDBACK_EVENT (0.2.7): "digest" is a first-class capture
+            // outcome (memories folded into a digest) — without it the
+            // read-side whitelist coerced it to "considered" and the digest
+            // event was invisible to every consumer.
+            outcome: row.outcome === "stored" || row.outcome === "skipped" || row.outcome === "digest" ? row.outcome : "considered",
             skipReason: typeof row.skipReason === "string" && row.skipReason.length > 0
                 ? row.skipReason
                 : undefined,
