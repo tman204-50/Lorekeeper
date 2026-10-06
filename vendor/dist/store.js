@@ -563,6 +563,29 @@ export class MemoryStore {
         // Exposed via /metrics; reset on each read.
         this.searchSignals = { calls: 0, boosted: 0, penalized: 0, neutral: 0 };
         this.lancedb = null;
+        // SELF_TUNING (0.2.12, Phase 7): in-process parameter registry.
+        // Each entry: { value, min, max, delta, enabled }
+        this.tunableParams = {
+            vectorWeight:       { value: 0.7, min: 0.3, max: 0.9, delta: 0.05, enabled: true },
+            bm25Weight:         { value: 0.3, min: 0.1, max: 0.7, delta: 0.05, enabled: true },
+            fuzzyWeight:        { value: 0.15, min: 0.0, max: 0.5, delta: 0.05, enabled: true },
+            rrfK:               { value: 60,  min: 10,  max: 120, delta: 10,   enabled: true },
+            feedbackWeight:     { value: 0.3, min: 0.0, max: 0.5, delta: 0.05, enabled: true },
+            recencyHalfLifeHours: { value: 72, min: 24,  max: 336, delta: 12,  enabled: true },
+            importanceWeight:   { value: 0.4, min: 0.0, max: 1.0, delta: 0.05, enabled: true },
+        };
+        // Trial scheduler state
+        this.trialState = {
+            lastTrialSearchCount: 0,
+            trialInterval: 500,
+            baseline: null,   // { mrr, hit5 } — set after first trial
+            bestParams: null,  // snapshot of the best-performing param set
+            isRunning: false,
+            consecutiveFailures: 0,
+        };
+        // Eval set: loaded by setEvalSet() from server/index.js
+        this.evalCases = [];
+        this.evalSetVersion = 0;
     }
     retentionConfig;
     setRetentionConfig(config) {
@@ -576,6 +599,22 @@ export class MemoryStore {
     retentionScoringConfig;
     setRetentionScoringConfig(config) {
         this.retentionScoringConfig = config || null;
+    }
+    // SELF_TUNING (Phase 7): load eval cases for in-process parameter trials.
+    setEvalSet(evalCases) {
+        if (!Array.isArray(evalCases) || evalCases.length === 0) {
+            log("warn", "[store] setEvalSet called with empty/invalid eval set — tuning disabled");
+            this.evalCases = [];
+            return;
+        }
+        this.evalCases = evalCases.filter((c) => {
+            const q = c.q ?? c.query;
+            const expects = c.expect ?? c.expects ?? [];
+            return q && expects.length > 0;
+        });
+        const version = this.evalSetVersion + 1;
+        this.evalSetVersion = version;
+        log("info", `[store] eval set loaded: ${this.evalCases.length} cases (v${version})`);
     }
     // GRAPH_STORE_PHASE1: attach the offline entity graph for provenance
     // cleanup on memory removal/merge. Safe no-op if never attached.
@@ -896,6 +935,14 @@ export class MemoryStore {
             .filter((item) => item.score >= params.minScore)
             .sort((a, b) => b.score - a.score)
             .slice(0, params.limit);
+        // SELF_TUNING (Phase 7): increment search call counter and check if a
+        // trial should fire. Fire-and-forget — trials run asynchronously and
+        // never delay the live search response.
+        this.trialState.searchCalls = (this.trialState.searchCalls ?? 0) + 1;
+        if (this.evalCases.length > 0 && !this.trialState.isRunning &&
+            this.trialState.searchCalls - this.trialState.lastTrialSearchCount >= this.trialState.trialInterval) {
+            this._runTrial().catch((e) => log("warn", `[store] trial failed: ${e.message}`));
+        }
         return scored;
     }
     async deleteById(id, scopes) {
@@ -3343,6 +3390,174 @@ export class MemoryStore {
             log("warn", `[store] getInferredFeedbackForScopes failed: ${e instanceof Error ? e.message : String(e)}`);
         }
         return inferred;
+    }
+    // ── SELF_TUNING (Phase 7) ─────────────────────────────────
+    async _runTrial() {
+        this.trialState.isRunning = true;
+        this.trialState.lastTrialSearchCount = this.trialState.searchCalls ?? 0;
+        const evalCases = this.evalCases;
+        if (evalCases.length === 0) { this.trialState.isRunning = false; return; }
+        const scope = "global";
+        // Snapshot current params
+        const currentSnapshot = this._getLiveParams();
+        // Capture baseline MRR with current params if not yet set
+        if (!this.trialState.baseline) {
+            const currentMrr = await this._evalMrr(evalCases, currentSnapshot, scope);
+            this.trialState.baseline = { mrr: currentMrr };
+            log("info", `[trial] baseline MRR = ${(currentMrr * 100).toFixed(1)}% (${evalCases.length} cases)`);
+        }
+        // Generate candidate combos: grid search around current value ± delta,
+        // clamped to the param's min/max range. Also include a copy of the
+        // current set (so plateau has a stable anchor for comparison).
+        const candidates = this._generateCandidates(currentSnapshot);
+        if (candidates.length === 0) { this.trialState.isRunning = false; return; }
+        let bestParams = currentSnapshot;
+        let bestMrr = this.trialState.baseline.mrr;
+        for (const candidate of candidates) {
+            const mrr = await this._evalMrr(evalCases, candidate, scope);
+            if (mrr > bestMrr) {
+                bestMrr = mrr;
+                bestParams = candidate;
+            }
+        }
+        const delta = bestMrr - this.trialState.baseline.mrr;
+        const THRESHOLD = 0.005; // 0.5% MRR improvement
+        if (delta >= THRESHOLD) {
+            this._applyParams(bestParams);
+            this.trialState.baseline = { mrr: bestMrr };
+            this.trialState.consecutiveFailures = 0;
+            log("info", `[trial] PROMOTED: MRR ${(this.trialState.baseline.mrr * 100).toFixed(1)}% (Δ +${(delta * 100).toFixed(1)}pp)`);
+        } else {
+            // Plateau: random walk one parameter
+            this.trialState.consecutiveFailures++;
+            const walked = this._randomWalk(currentSnapshot);
+            this._applyParams(walked);
+            log("info", `[trial] plateau (best Δ ${(delta * 100).toFixed(2)}pp) — random walk, failures=${this.trialState.consecutiveFailures}`);
+        }
+        this.trialState.isRunning = false;
+    }
+    _getLiveParams() {
+        const p = this.tunableParams;
+        return {
+            vectorWeight: p.vectorWeight.value,
+            bm25Weight: p.bm25Weight.value,
+            fuzzyWeight: p.fuzzyWeight.value,
+            rrfK: p.rrfK.value,
+            feedbackWeight: p.feedbackWeight.value,
+            recencyHalfLifeHours: p.recencyHalfLifeHours.value,
+            importanceWeight: p.importanceWeight.value,
+        };
+    }
+    _applyParams(params) {
+        const p = this.tunableParams;
+        p.vectorWeight.value = params.vectorWeight;
+        p.bm25Weight.value = params.bm25Weight;
+        p.fuzzyWeight.value = params.fuzzyWeight;
+        p.rrfK.value = params.rrfK;
+        p.feedbackWeight.value = params.feedbackWeight;
+        p.recencyHalfLifeHours.value = params.recencyHalfLifeHours;
+        p.importanceWeight.value = params.importanceWeight;
+    }
+    _generateCandidates(current) {
+        const candidates = [current]; // Always evaluate current params
+        const DIMENSIONS = [
+            { key: "vectorWeight", delta: 0.05, min: 0.3, max: 0.9 },
+            { key: "bm25Weight", delta: 0.05, min: 0.1, max: 0.7 },
+            { key: "fuzzyWeight", delta: 0.05, min: 0.0, max: 0.5 },
+            { key: "rrfK", delta: 10, min: 10, max: 120 },
+            { key: "feedbackWeight", delta: 0.05, min: 0.0, max: 0.5 },
+            { key: "recencyHalfLifeHours", delta: 12, min: 24, max: 336 },
+            { key: "importanceWeight", delta: 0.05, min: 0.0, max: 1.0 },
+        ];
+        // For each enabled dimension, generate ±1 delta variant
+        for (const dim of DIMENSIONS) {
+            const param = this.tunableParams[dim.key];
+            if (!param || !param.enabled) continue;
+            for (const dir of [-1, 1]) {
+                const candidate = { ...current };
+                const newVal = Math.min(dim.max, Math.max(dim.min, current[dim.key] + dir * dim.delta));
+                if (newVal === current[dim.key]) continue; // clipped to same value
+                candidate[dim.key] = newVal;
+                candidates.push(candidate);
+            }
+        }
+        // Deduplicate by JSON fingerprint
+        const seen = new Set();
+        return candidates.filter((c) => {
+            const key = JSON.stringify(c);
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    }
+    async _evalMrr(evalCases, params, scope) {
+        const scopes = [scope]; // single-user
+        let reciprocalSum = 0;
+        let found = 0;
+        for (const c of evalCases) {
+            const query = c.q ?? c.query;
+            const expects = c.expect ?? c.expects ?? [];
+            if (!query || expects.length === 0) continue;
+            // Use the search params from the config but override with trial params
+            const queryVector = []; // No vector in trial — use BM25+fuzzy only for speed
+            try {
+                if (this.embedder) queryVector.push(...(await this.embedder.embed(query))); // eslint-disable-line no-await-in-loop
+            } catch { /* no vector */ }
+            const results = await this._search({
+                query,
+                queryVector,
+                scopes,
+                limit: 5,
+                minScore: 0,
+                vectorWeight: params.vectorWeight,
+                bm25Weight: params.bm25Weight,
+                fuzzyWeight: params.fuzzyWeight,
+                fuzzyThreshold: 0.5,
+                rrfK: params.rrfK,
+                recencyBoost: true,
+                recencyHalfLifeHours: params.recencyHalfLifeHours,
+                importanceWeight: params.importanceWeight,
+                feedbackWeight: params.feedbackWeight,
+                globalDiscountFactor: 1.0,
+            });
+            let rank = 0;
+            for (let i = 0; i < results.length; i++) {
+                const rec = results[i].record ?? results[i];
+                const id12 = (rec.id ?? "").slice(0, 12).replace(/[^a-zA-Z0-9]/g, "");
+                for (const exp of expects) {
+                    const exp12 = exp.slice(0, 12).replace(/[^a-zA-Z0-9]/g, "");
+                    if (id12 === exp12 || id12.startsWith(exp12) || exp12.startsWith(id12)) {
+                        rank = i + 1;
+                        break;
+                    }
+                }
+                if (rank > 0) break;
+            }
+            if (rank > 0) {
+                reciprocalSum += 1.0 / rank;
+                found++;
+            }
+        }
+        return found > 0 ? reciprocalSum / evalCases.length : 0;
+    }
+    _randomWalk(current) {
+        const DIMENSIONS = [
+            { key: "vectorWeight", delta: 0.05, min: 0.3, max: 0.9 },
+            { key: "bm25Weight", delta: 0.05, min: 0.1, max: 0.7 },
+            { key: "fuzzyWeight", delta: 0.05, min: 0.0, max: 0.5 },
+            { key: "rrfK", delta: 10, min: 10, max: 120 },
+            { key: "feedbackWeight", delta: 0.05, min: 0.0, max: 0.5 },
+            { key: "recencyHalfLifeHours", delta: 12, min: 24, max: 336 },
+            { key: "importanceWeight", delta: 0.05, min: 0.0, max: 1.0 },
+        ];
+        // Pick a random enabled dimension
+        const enabled = DIMENSIONS.filter((d) => this.tunableParams[d.key]?.enabled);
+        if (enabled.length === 0) return current;
+        const dim = enabled[Math.floor(Math.random() * enabled.length)];
+        const dir = Math.random() < 0.5 ? -1 : 1;
+        const candidate = { ...current };
+        candidate[dim.key] = Math.min(dim.max, Math.max(dim.min, current[dim.key] + dir * dim.delta));
+        return candidate;
     }
     async getMemoryFeedbackStatsMap(memoryIds, scopes) {
         const feedbackStats = new Map();

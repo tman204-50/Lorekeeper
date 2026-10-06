@@ -38,7 +38,7 @@ const SCHEMA_VERSION = 1;
 // Bump together with provider/_version.py __version__ and provider/plugin.yaml
 // "version" — logged at boot and served from /health so we can track which
 // code is actually loaded.
-const SERVICE_VERSION = "0.2.11";
+const SERVICE_VERSION = "0.2.12";
 
 const PORT = Number(process.env.LOREKEEPER_PORT ?? 18777);
 const HOST = process.env.LOREKEEPER_HOST ?? "127.0.0.1";
@@ -151,6 +151,16 @@ async function ensureInit() {
       await state.store.init(dim);
       if (state.store.indexState?.dimensionMismatch) {
         log("warn", "embedding dimension mismatch detected; repair needed");
+      }
+      // SELF_TUNING (Phase 7): load the eval set into the store for
+      // in-process parameter trials.
+      try {
+        const evalPath = join(process.cwd(), "test/eval/recall_set.json");
+        const evalRaw = JSON.parse(await readFile(evalPath, "utf-8"));
+        const cases = Array.isArray(evalRaw.cases) ? evalRaw.cases : [];
+        state.store.setEvalSet(cases);
+      } catch (e) {
+        log("warn", `self-tuning eval set not loaded: ${e.message}`);
       }
       // LLM shim: OpenRouter-compatible client so capture.mode="llm" and
       // LLM digests work. Reads OPENROUTER_API_KEY from the environment.
@@ -440,16 +450,16 @@ const handlers = {
       queryVector,
       scopes,
       limit: limit ?? 5,
-      vectorWeight: isFallback ? 0 : state.config.retrieval.vectorWeight,
-      bm25Weight: isFallback ? 1 : state.config.retrieval.bm25Weight,
-      fuzzyWeight: state.config.retrieval.fuzzyWeight,
+      vectorWeight: isFallback ? 0 : (state.store?.tunableParams?.vectorWeight?.value ?? state.config.retrieval.vectorWeight),
+      bm25Weight: isFallback ? 1 : (state.store?.tunableParams?.bm25Weight?.value ?? state.config.retrieval.bm25Weight),
+      fuzzyWeight: state.store?.tunableParams?.fuzzyWeight?.value ?? state.config.retrieval.fuzzyWeight,
       fuzzyThreshold: state.config.retrieval.fuzzyThreshold,
       minScore: state.config.retrieval.minScore,
-      rrfK: state.config.retrieval.rrfK,
+      rrfK: state.store?.tunableParams?.rrfK?.value ?? state.config.retrieval.rrfK,
       recencyBoost: state.config.retrieval.recencyBoost,
-      recencyHalfLifeHours: state.config.retrieval.recencyHalfLifeHours,
-      importanceWeight: state.config.retrieval.importanceWeight,
-      feedbackWeight: state.config.retrieval.feedbackWeight,
+      recencyHalfLifeHours: state.store?.tunableParams?.recencyHalfLifeHours?.value ?? state.config.retrieval.recencyHalfLifeHours,
+      importanceWeight: state.store?.tunableParams?.importanceWeight?.value ?? state.config.retrieval.importanceWeight,
+      feedbackWeight: state.store?.tunableParams?.feedbackWeight?.value ?? state.config.retrieval.feedbackWeight,
       globalDiscountFactor: state.config.globalDiscountFactor,
     });
     const items = results.map((r) => {
@@ -673,6 +683,8 @@ const handlers = {
       timing: getTimingStats(),
       scopeCache: state.store?.cacheStats ?? null,
       searchSignals: state.store?.searchSignals ?? (state.store ? { calls: 0, boosted: 0, penalized: 0, neutral: 0 } : null),
+      tunableParams: state.store?.tunableParams ?? null,
+      trialState: state.store?.trialState ?? null,
       process: {
         rssKib: Math.round(mem.rss / 1024),
         heapUsedKib: Math.round(mem.heapUsed / 1024),
