@@ -683,8 +683,16 @@ const handlers = {
       timing: getTimingStats(),
       scopeCache: state.store?.cacheStats ?? null,
       searchSignals: state.store?.searchSignals ?? (state.store ? { calls: 0, boosted: 0, penalized: 0, neutral: 0 } : null),
-      tunableParams: state.store?.tunableParams ?? null,
-      trialState: state.store?.trialState ?? null,
+      tunableParams: state.store?.tunableParams ?? (state.store ? {
+        vectorWeight: { value: 0.7, min: 0.3, max: 0.9, delta: 0.05, enabled: true },
+        bm25Weight: { value: 0.3, min: 0.1, max: 0.7, delta: 0.05, enabled: true },
+        fuzzyWeight: { value: 0.15, min: 0.0, max: 0.5, delta: 0.05, enabled: true },
+        rrfK: { value: 60, min: 10, max: 120, delta: 10, enabled: true },
+        feedbackWeight: { value: 0.3, min: 0.0, max: 0.5, delta: 0.05, enabled: true },
+        recencyHalfLifeHours: { value: 72, min: 24, max: 336, delta: 12, enabled: true },
+        importanceWeight: { value: 0.4, min: 0.0, max: 1.0, delta: 0.05, enabled: true },
+      } : null),
+      trialState: state.store?.trialState ?? (state.store ? { searchCalls: 0, trialInterval: 500, lastTrialSearchCount: 0, baseline: null, bestParams: null, isRunning: false, consecutiveFailures: 0 } : null),
       process: {
         rssKib: Math.round(mem.rss / 1024),
         heapUsedKib: Math.round(mem.heapUsed / 1024),

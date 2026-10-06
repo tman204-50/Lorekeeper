@@ -940,7 +940,7 @@ export class MemoryStore {
         // never delay the live search response.
         this.trialState.searchCalls = (this.trialState.searchCalls ?? 0) + 1;
         if (this.evalCases.length > 0 && !this.trialState.isRunning &&
-            this.trialState.searchCalls - this.trialState.lastTrialSearchCount >= this.trialState.trialInterval) {
+            (this.trialState.searchCalls ?? 0) - (this.trialState.lastTrialSearchCount ?? 0) >= (this.trialState.trialInterval ?? 500)) {
             this._runTrial().catch((e) => log("warn", `[store] trial failed: ${e.message}`));
         }
         return scored;
