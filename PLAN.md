@@ -122,3 +122,113 @@ Auth: loopback + bearer token (in `lorekeeper.json`, like mem0's pattern).
 - Capture mode: heuristics (offline) or LLM (needs a resolvable provider)?
   Start heuristics; LLM later.
 - Scoping: `"global"` (single-user) — matches our single-user setup.
+
+## Phase 6: Closed-loop self-tuning recall
+
+Goal: the store stops being hand-tuned. Effectiveness telemetry it already
+collects feeds back into ranking and retention, and every ranking change is
+gated by a reproducible eval number instead of vibes.
+
+**Key finding (2026-10-05):** the vendor store already has a `feedbackWeight`
+channel at default 0.3 — it tracks manual `helpful`/`unhelpful`/`wrong` per
+memory, computes a `feedbackFactor` (0.5–2.0 range), and applies it as a
+score multiplier (`1 + feedbackWeight * (feedbackFactor - 1)`). Our baseline
+MRR of 72.8% already includes this operating. Phase 6 scope corrects for what
+ACTUALLY needs building.
+
+Design decisions (Todd, 2026-10-05) remain authoritative — they define what
+the behavior contract is, even if some are already satisfied by the existing
+code.
+
+### D1–D8 standing (all DECIDED, not all need code)
+
+- **D1 — Helpfulness signal:** both manual flags + inferred signals, inferred
+  weighted higher. → **Needs new work** (inferred signal pipeline from
+  task_episodes).
+- **D2 — Boost ceiling:** relevance always wins; boost is tie-breaker only.
+  → **Already satisfied** by `feedbackWeight=0.3` cap (max multiplier ~1.3×
+  when feedbackFactor=2.0; cannot flip relevance order).
+- **D3 — Digest eligibility:** never-recalled AND low-importance only, with
+  category allowlist. → **Needs verification/update** — the store's
+  `protectedCategories` already exists, but need to confirm the expire-sweep
+  candidate picker respects all three conditions (recall-age, importance,
+  allowlist).
+- **D4 — Error attribution:** `validate_citation` arbitrates. → **Deferred**
+  — the `wrong` feedback type exists, but citation validation as a mechanism
+  does not. Needs the citation system built first.
+- **D5 — Transparency:** `/metrics` counters only. → **Needs new work** —
+  add `store.search.signals` counters showing feedbackFactor distribution,
+  count of records boosted/penalized, etc.
+- **D6 — Eval set refresh:** quarterly auto-refresh, Todd confirms baseline.
+  → **Already designed into the runner** (--baseline flag + git commit
+  workflow). No code needed until first refresh.
+- **D7 — Live tripwire:** degradation → scripts/notify + auto-revert.
+  → **Needs new work** — cron-wrapper that runs the eval runner against the
+  live store and triggers on regression.
+- **D8 — Capture boundary:** read-path loop only for Phase 6; capture future.
+  → **Already honored.** No changes to capture path.
+
+### 6a. Recall eval harness (✅ DONE — committed c8a574d + a0f7a04)
+
+- [x] `test/eval/recall_set.json` — 40 query→expected-id pairs (exact hits,
+      R1 typo regressions, paraphrases, cross-category, negatives).
+- [x] `test/recall_eval.mjs` — hits live /search, computes MRR + top-5 hit
+      rate, compares vs `test/eval/baseline.json`, exits 1 on regression.
+- [x] Baseline captured: MRR **72.8%**, top-5 hit **100%**, 40/40 found.
+- [x] Standing rule in play: every ranking change ships with an MRR number
+      in the commit message or it doesn't ship.
+
+### 6b. Effectiveness visibility (new scope — what actually needs building)
+
+**No `relevance_signals.js` module.** The existing `store.js` scoring pipeline
+already handles the feedback factor. New work is additive patches to the vendor
+store (tagged fork comments), each behind an env-default-off flag:
+
+1. **Metrics counters (D5).** Add `store.search.signals` to the /metrics
+   output: number of records with positive feedback, count boosted vs
+   penalized, mean/median feedbackFactor for boosted records, etc. The channel
+   is running at 0.3 right now with ZERO visibility — this is the cheapest
+   way to know whether it's doing anything useful.
+
+2. **Inferred signal pipeline (D1).** Wire task-episode retry/success data
+   into `getMemoryFeedbackStatsMap` alongside the manual feedback. An
+   episodic task that completes without retries implies its recalled memories
+   were effective. This is the heaviest new code — likely a helper module
+   that reads from the episodic_tasks table and emits synthetic feedback
+   rows tagged `source: "inferred"`.
+
+3. **Category allowlist confirm (D3).** Verify that the expire sweep respects
+   protectedCategories + recall age + importance. Patch if not.
+
+4. **D7 tripwire.** A small cron-wrappable script (`lorekeeper eval-check`)
+   that runs recall_eval.mjs against the live store and fires
+   `scripts/notify` + flag-revert on regression. Fast, no new runtime
+   infrastructure.
+
+5. **D4 error attribution.** Deferred. Requires validate_citation to exist
+   as a real mechanism (currently a tool stub). Not in this phase.
+
+### 6c. Acceptance criteria (updated)
+
+- [x] Eval runner + seed set + baseline committed; runs <30s on 2.5k rows.
+- [x] MRR + hit5 reported per ranking change in commit messages.
+- [ ] Metrics counters visible in /metrics showing feedback channel activity.
+- [ ] Inferred signals: task-episode success rate feeds into feedback stats
+      (default-off flag).
+- [ ] Category allowlist + importance gate verified in expire sweep.
+- [ ] D7 tripwire script exists and fires scripts/notify on regression.
+- [ ] Live-store dry measurement (scratch instance, export/import round-trip)
+      before any non-default flag flips on lorekeeper.service.
+- [ ] Version bump in all three surfaces (provider/_version.py,
+      server SERVICE_VERSION, provider/plugin.yaml) + install.sh
+      --plugin-only verification, per standing rule.
+
+### 6d. Deferred (parked, requires 6a eval data or separate decision)
+
+- **ANN index for the scan.** O(n) search at ~20ms is fine at 2.5k rows;
+      becomes the wall at ~20k. LanceDB native ANN (VARCH/IVF-PQ) once
+      eval set proves the quality delta.
+- **Cross-path search cache (S3).** Remains parked; eval set gives it a
+      testbed if http.search counts ever justify reviving.
+- **D4 error attribution / citation validation.** Needs the validate_citation
+      mechanism built. Not before 6c items.
