@@ -54,7 +54,7 @@ class FakeClient:
                 raise RuntimeError("injected failure")
             self.captures.append(payload)
 
-    def search(self, query, limit=5, scope=None):
+    def search(self, query, limit=5, scope=None, source=None):
         return {"results": [{"text": f"prefetched: {query}"}]}
 
     def wait_captures(self, n, timeout=3.0):

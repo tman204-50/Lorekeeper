@@ -42,7 +42,7 @@ class RecordingClient:
     def __init__(self):
         self.searches = []
 
-    def search(self, query, limit=5, scope=None):
+    def search(self, query, limit=5, scope=None, source=None):
         self.searches.append(query)
         return {"results": [{"text": f"hit for {query[:30]}"}]}
 

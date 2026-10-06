@@ -219,7 +219,7 @@ class LorekeeperMemoryProvider(MemoryProvider):
 
         def _run():
             try:
-                results = client.search(query, limit=5)
+                results = client.search(query, limit=5, source="system-transform")
             except Exception as e:
                 logger.debug("Lorekeeper prefetch failed: %s", e)
                 return

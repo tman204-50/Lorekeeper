@@ -310,9 +310,16 @@ class LorekeeperClient:
     def init(self) -> dict:
         return self._request("POST", "/init", {})
 
-    def search(self, query: str, limit: int = 5, scope: Optional[str] = None) -> dict:
+    def search(self, query: str, limit: int = 5, scope: Optional[str] = None, source: Optional[str] = None) -> dict:
+        # RECALL_TELEMETRY (0.2.10): source tags the recall event the service
+        # writes (system-transform = auto prefetch, manual-search = explicit).
+        # It only changes telemetry bucketing, not the result shape, so it is
+        # deliberately NOT part of the search-cache key (see below).
+        payload: Dict[str, Any] = {"query": query, "limit": limit, "scope": scope}
+        if source is not None:
+            payload["source"] = source
         key = ("search", self._normalize_query(query), limit, scope)
-        return self._search_fetch(key, lambda: self._request("POST", "/search", {"query": query, "limit": limit, "scope": scope}))
+        return self._search_fetch(key, lambda: self._request("POST", "/search", payload))
 
     def remember(self, content: str, category: Optional[str] = None, importance: Optional[float] = None, scope: Optional[str] = None) -> dict:
         payload: Dict[str, Any] = {"content": content}

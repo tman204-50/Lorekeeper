@@ -38,7 +38,7 @@ const SCHEMA_VERSION = 1;
 // Bump together with provider/_version.py __version__ and provider/plugin.yaml
 // "version" — logged at boot and served from /health so we can track which
 // code is actually loaded.
-const SERVICE_VERSION = "0.2.9";
+const SERVICE_VERSION = "0.2.10";
 
 const PORT = Number(process.env.LOREKEEPER_PORT ?? 18777);
 const HOST = process.env.LOREKEEPER_HOST ?? "127.0.0.1";
@@ -464,6 +464,24 @@ const handlers = {
         timestamp: rec.timestamp,
       };
     });
+    // RECALL_TELEMETRY (0.2.10): /search is the Hermes prefetch path — auto-
+    // recall fires before every turn but wrote NO recall event, so
+    // recall.auto.requested stayed 0 and recall was invisible to
+    // memory_effectiveness / memory_dashboard (or miscounted as manual when a
+    // tool search also ran). Record it like the system-transform path in
+    // vendor/dist/index.js: fire-and-forget, never block the response.
+    const recallSource = typeof args.source === "string" && args.source.length > 0 ? args.source : "manual-search";
+    state.store.putEvent({
+      id: generateId(),
+      type: "recall",
+      source: recallSource,
+      scope: activeScope,
+      sessionID: args.sessionID ?? "",
+      timestamp: Date.now(),
+      resultCount: items.length,
+      injected: items.length > 0,
+      metadataJson: JSON.stringify({ source: recallSource }),
+    }).catch((error) => log("warn", `[recall] putEvent failed: ${error instanceof Error ? error.message : String(error)}`));
     return { results: items, count: items.length };
   },
   async delete(args) {
