@@ -4,10 +4,12 @@
 
 # Lorekeeper
 
-LanceDB-backed long-term memory for Hermes Agent — a self-contained fork of
+LanceDB-backed long-term memory for Hermes Agent — a fork of
 [`opencode-memory-pro`](https://github.com/tman204-50/opencode-memory-pro)
-v1.6.2 (MIT). The battle-tested Node store runs as a localhost HTTP service;
-a thin Python plugin implements Hermes' `MemoryProvider` interface.
+v1.6.2 (MIT) with substantial custom work on top (client efficiency, recall
+latency, safety, observability — see [Fork enhancements](#fork-enhancements)).
+The battle-tested Node store runs as a localhost HTTP service; a thin Python
+plugin implements Hermes' `MemoryProvider` interface.
 
 ## Architecture
 
@@ -20,8 +22,11 @@ Hermes (Python)                    Lorekeeper service (Node, localhost:18777)
 └──────────────────────┘           └──────────────────────────────────────┘
 ```
 
-- `vendor/dist/` — forked store from opencode-memory-pro 1.6.2 (unchanged).
-- `server/` — the HTTP service wrapper.
+- `vendor/dist/` — forked store from opencode-memory-pro 1.6.2 **plus local
+  fork fixes** (trigram fuzzy index, consolidate dryRun, merge text stash,
+  digest feedback events, cache work — all marked with tag comments like
+  `CONSOLIDATE_DRYRUN (0.2.4)`).
+- `server/` — the HTTP service wrapper + LLM shim (`llm_shim.js`).
 - `provider/` — the Hermes plugin (installed to `~/.hermes/plugins/lorekeeper/`).
 
 ## One-command install
@@ -38,6 +43,18 @@ What it does:
 5. Copies the usage skill to `$HERMES_HOME/skills/lorekeeper-usage/`
 6. Sets `memory.provider = lorekeeper`
 7. Writes `$HERMES_HOME/lorekeeper.json` with host + token
+
+For iterating on an installed box, `./install.sh --plugin-only` skips the
+full install: it copies `provider/*.py` + `plugin.yaml` into the Hermes
+plugin dir, restarts the lorekeeper service, verifies all four version
+surfaces agree (`provider`, `server`, installed plugin, `/health`), and runs
+the **staleness guard** — hermes-serve is auto-restarted if it predates the
+install (it imports the plugin once and caches it; a stale serve process was
+the root cause of mysterious desktop-side tool timeouts), and a stale
+hermes-gateway is flagged with the exact restart command (never restarted
+automatically — that kills active hermes turns). Verification hook after any
+update: `grep "lorekeeper.client v" /root/.hermes/logs/agent.log | tail -1`
+must show the new version.
 
 Requirements: node >= 22, npm, git, hermes CLI. Optional: ollama with
 `nomic-embed-text` (falls back to OpenAI embedder).
@@ -74,15 +91,95 @@ Config: `~/.hermes/lorekeeper.json` via `hermes memory setup` (host field).
 | POST | `/search` | `{query, limit?, scope?}` → `{results:[{id,text,score,...}], count}` |
 | POST | `/remember` | `{content, category?, importance?, scope?}` → `{id}` |
 | POST | `/capture` | `{sessionID?, text, scope?}` → `{stored, id?, category?, importance?, skipReason?}` |
-| POST | `/tools` | `{}` → `{tools:[{name, description, parameters}]}` (34 fork tools) |
+| POST | `/tools` | `{}` → `{tools:[{name, description, parameters}]}` (35 fork tools) |
 | POST | `/tool` | `{name, toolArgs?}` → `{result}` (generic dispatch) |
 | POST | `/delete` | `{id, force?}` → `{ok, id}` |
 | POST | `/stats` | `{}` → `{counts, index}` |
 | POST | `/list` | `{scope?, limit?}` → `{results}` |
 | POST | `/export` | `{}` → `{memories}` |
 | POST | `/import` | `{memories, mode?}` → `{imported}` |
+| POST | `/consolidate` | `{scope?, dryRun?}` → `{ok, scope, result}` (dryRun = fast read-only duplicate estimate) |
+| POST | `/metrics` | `{}` → `{timing:[{op,count,avgMs,lastMs,lastExtra}], scopeCache}`; `{"reset":true}` clears |
 
 Auth: `Authorization: Bearer <token>` (token in `~/.hermes/lorekeeper/token`).
+
+## Fork enhancements
+
+What this fork adds over upstream 1.6.2 (all regression-tested; see `test/`):
+
+**Client (`provider/_client.py`)**
+- Per-tool timeout table — heavy tools (`summarize`, `consolidate*`,
+  `reembed`, `import`) get 300s instead of the 10s default; capture 120s.
+- Keep-alive connection + process-wide shared client + `/tools` schema cache.
+- TTL search cache with in-flight call coalescing; failure-type-aware
+  retries (transient vs schema vs auth).
+- Threshold capture flush (long transcripts flush at 1200 chars) and
+  prefetch query shaping (400-char head) at both entry points.
+- Debug logging: `LOREKEEPER_CLIENT_DEBUG=1`, and every client logs
+  `lorekeeper.client vN (first request)` — the staleness verification hook.
+
+**Recall latency (vendor store)**
+- Trigram fuzzy channel replaces Fuse.js (warm `store.search` ~426ms → ~20ms;
+  88% top-5 overlap with the old channel, typo tolerance preserved).
+- Incremental scope-cache patch on write (no full cache rebuild per put).
+- `pruneScope` reuses the warm scope cache (post-capture cost ~241ms → ~0.1ms).
+
+**Safety / correctness**
+- `consolidate` gained a real `dryRun` (upstream silently stripped it and
+  ran a real merge): fast read-only estimate via cache-first row read +
+  exact in-memory cosine + greedy simulation (2.3k rows: 43s → ~3s), no
+  writes, no confirm required. Real runs still require `confirm=true`.
+- `task_episode_delete` tool (by episodeId or taskId, confirm-gated,
+  scope-limited) — episodes previously accumulated forever.
+- `global_list` `filter` is a strict enum (`unused` | `disabled`);
+  `filter="disabled"` lists soft-deleted rows marked `[DISABLED]` so a
+  forget stays auditable instead of invisible.
+- Consolidation survivors stash absorbed text in
+  `metadata.mergedTexts [{id, text ≤800c, mergedAt}]` (last 10) — near-dup
+  wording no longer leaves recall unrecoverably.
+
+**Digests / observability**
+- Digest LLM prompts get a 300s budget via `LLMSessionClient.withTimeout`
+  (was a 60s cap that silently degraded big digests to extractive);
+  `summarize` responses report `digestMode: llm | extractive` per digest
+  plus `digestModes` counts.
+- Digest creation emits a capture event (`outcome: "digest"`) counted as
+  `capture.digests` by `memory_effectiveness` and the KPI weekly view —
+  memory folding is no longer silent.
+- `/metrics` timing spans (`store.*`, `embedder.*`, `llm.*`, `http.*`),
+  scope-cache stats, aborted LLM captures (`withSignal`, 90s controller
+  abort), and HTTP `/consolidate` (so long consolidations survive gateway
+  tool timeouts).
+
+**Tool count note:** the service serves **35** tools (the 34 upstream fork
+tools + `lorekeeper_task_episode_delete`).
+
+## Two-store topology gotcha
+
+The same tool names exist in **two different stores**, and rows written in
+one are invisible to the other:
+
+| Store | Path | Serves |
+|---|---|---|
+| Lorekeeper **service** store | `~/.hermes/lorekeeper/lancedb` | `lorekeeper_*` prefixed tools (Hermes sessions, via HTTP `/tool`) |
+| opencode **plugin** store | `~/.opencode/memory/lancedb` | bare-name tools (`memory_*`, `task_episode_*`) in opencode sessions |
+
+The opencode plugin store also auto-creates `session-ses_*` tracking
+episodes (stuck in `running`) — housekeeping concern of the opencode plugin,
+not the Hermes-facing service.
+
+## Tests
+
+```bash
+# python (HTTP-level, boots scratch services on dedicated ports)
+python3 test/test_client.py test_shared.py test_fuzzy_recall.py \
+        test_capture_flush.py test_tools_cache.py test_consolidate_dryrun.py
+
+# node (store-level, temp LanceDB dirs, mock embedders / mock OpenRouter)
+node test/test_digest_shim.mjs test/test_f234_fixes.mjs test/test_gap12_f1.mjs
+```
+
+Every fork change ships with a regression test in this suite.
 
 ## CLI (`bin/lorekeeper`)
 
@@ -108,6 +205,8 @@ Env: `LOREKEEPER_PORT`, `LOREKEEPER_TOKEN`, `LOREKEEPER_DB_PATH`,
 - `OPENROUTER_API_KEY` — loaded from `$HERMES_HOME/.env` automatically; enables
   LLM capture/digests via the shim (`server/llm_shim.js`).
 - `OPENCODE_MEMORY_PRO_CAPTURE_LLM_MODEL` — default `minimax/minimax-m3`.
+- `LOREKEEPER_CLIENT_DEBUG=1` — per-request debug lines from the Python client.
+- `LOREKEEPER_HOST` — bind address (default `127.0.0.1`; see deployment notes).
 
 ## Data locations
 
@@ -119,10 +218,16 @@ Env: `LOREKEEPER_PORT`, `LOREKEEPER_TOKEN`, `LOREKEEPER_DB_PATH`,
 
 - [x] Phase 1: Node service (health/init/remember/search/delete/stats/list/export/import)
 - [x] Phase 2: Hermes provider wired (lorekeeper_search/remember/delete/stats)
-- [x] Phase 3: full tool surface (34 fork tools via generic /tool dispatcher)
+- [x] Phase 3: full tool surface (35 fork tools via generic /tool dispatcher)
 - [x] Phase 4: auto-capture (service /capture + provider sync_turn/session hooks)
 - [x] Phase 4b: LLM capture/digests via OpenRouter shim (minimax/minimax-m3)
 - [x] Phase 5: imported old OpenClaw gold memories (885, via import_old_data.mjs)
+- [x] v0.2.x hardening: client efficiency round (timeouts, keep-alive, caches,
+      retries), recall-latency round (trigram fuzzy channel, incremental scope
+      cache, pruneScope reuse), safety round (consolidate dryRun, task episode
+      delete, global_list enum+disabled visibility, merge text stash),
+      digest round (300s LLM budget, digestMode visibility, digest feedback
+      events), `/metrics` observability, install.sh staleness guard.
 
 See `PLAN.md` for details.
 
@@ -177,7 +282,7 @@ from the Janus/Adriana deployment (2026-09-29):
 
 Verification sequence (all must pass): `curl :18777/health` from inside the
 container namespace; `hermes config get memory.provider` inside the container;
-agent.log shows `Memory provider 'lorekeeper' registered (34 tools)`; and the
+agent.log shows `Memory provider 'lorekeeper' registered (35 tools)`; and the
 agent can actually invoke `lorekeeper_stats` and `lorekeeper_remember` (test on
 a fresh session, then delete the test memory — fresh rows outrank old history).
 
@@ -188,10 +293,10 @@ never engages for this plugin — the toolset key never lands in
 `plugin_toolset_keys.json` (the gateway rewrites that cache from discovery
 on every boot, dropping hand-added keys). The tools DO register into the
 model_tools registry via the memory-provider path (`Memory provider
-'lorekeeper' registered (34 tools)`), but sessions on the OpenAI-HTTP/A2A
+'lorekeeper' registered (35 tools)`), but sessions on the OpenAI-HTTP/A2A
 gateway (`platform: api_server`) resolve their toolset scope from
 `platform_toolsets` — and `api_server` is absent from that map by default,
-so the 34 tools sit in the registry, out of scope, and every call fails
+so the 35 tools sit in the registry, out of scope, and every call fails
 with "'lorekeeper_*' is not available in this session". The durable fix is
 an explicit entry (verified on Janus/Adriana 2026-09-29, survives container
 restarts and cache rewrites):
