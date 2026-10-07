@@ -1,0 +1,20 @@
+{
+  "_comment": "Lorekeeper policy config — single source of truth (2026-10-07). Values preserved as-is from the previous env presets. Infra knobs (db paths, token, MAX_RECORDS_PER_SCOPE) stay in the systemd unit.",
+  "scoping": "global",
+  "minCaptureChars": 80,
+  "capture": {
+    "mode": "llm",
+    "llm": {
+      "provider": "openrouter",
+      "model": "minimax/minimax-m3"
+    }
+  },
+  "injection": {
+    "mode": "adaptive",
+    "summarization": "auto"
+  },
+  "retrieval": {
+    "recencyHalfLifeHours": 168,
+    "importanceWeight": 1.0
+  }
+}

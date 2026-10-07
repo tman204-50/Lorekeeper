@@ -83,31 +83,10 @@ if (!authToken) {
 // (OPENCODE_MEMORY_PRO_*) or a lorekeeper.json config file.
 process.env.OPENCODE_MEMORY_PRO_DB_PATH ??= DB_PATH;
 process.env.OPENCODE_MEMORY_PRO_GRAPH_DB_PATH ??= GRAPH_PATH;
-process.env.OPENCODE_MEMORY_PRO_SCOPING ??= "global"; // single-user
-// Per-turn capture (vs the fork's whole-session buffer): a single turn used
-// to be 40-80 chars, so the fork's 80-char floor was lowered to 40. But short
-// noisy turns (questions, requests, one-liners) slip through at 40 chars; the
-// fork's own default of 80 filters more of them while still passing most
-// substantive turns. Heuristic FP reduction (2026-09-10): back to 80.
-process.env.OPENCODE_MEMORY_PRO_MIN_CAPTURE_CHARS ??= "80";
-// Adaptive injection (2026-09-10): drop low-scoring memories below the floor
-// and summarize when the budget is tight, instead of always injecting up to
-// maxMemories verbatim. Knobs: scoreDropTolerance (0.15), injectionFloor (0.2).
-process.env.OPENCODE_MEMORY_PRO_INJECTION_MODE ??= "adaptive";
-process.env.OPENCODE_MEMORY_PRO_INJECTION_SUMMARIZATION ??= "auto";
-// LLM capture/digests via the shim (OpenRouter + minimax/minimax-m3).
-// OPENROUTER_API_KEY is read from the environment (Hermes .env or export).
-process.env.OPENCODE_MEMORY_PRO_CAPTURE_MODE ??= "llm";
-process.env.OPENCODE_MEMORY_PRO_CAPTURE_LLM_PROVIDER ??= "openrouter";
-process.env.OPENCODE_MEMORY_PRO_CAPTURE_LLM_MODEL ??= "minimax/minimax-m3";
-// Recency boost: soften the 72h default half-life to 7 days so fresh captures
-// don't bury the imported history (old memories decay toward the 0.5 floor
-// either way, but days-old memories keep a fairer share of the boost).
-process.env.OPENCODE_MEMORY_PRO_RECENCY_HALF_LIFE_HOURS ??= "168";
-// Importance weight: 0.4 -> 1.0 so high-importance memories (profile 0.9,
-// preferences 0.8) outrank the churn despite the recency floor. A profile
-// memory now gets ~1.9x from importance vs 1.36x before.
-process.env.OPENCODE_MEMORY_PRO_IMPORTANCE_WEIGHT ??= "1.0";
+// Policy knobs (scoping, minCaptureChars, capture mode/LLM, injection, recency,
+// importance) live in lorekeeper_config.json — see LOREKEEPER_CONFIG below.
+// Env vars here were removed 2026-10-07 so the config file is authoritative
+// (env presets would outrank the config in the resolver's precedence order).
 
 const configPath = process.env.LOREKEEPER_CONFIG;
 if (configPath) {
