@@ -6,7 +6,7 @@
     "mode": "llm",
     "llm": {
       "provider": "openrouter",
-      "model": "minimax/minimax-m3"
+      "model": "qwen/qwen3.7-flash"
     }
   },
   "injection": {
