@@ -5,7 +5,7 @@ import { log } from "./logger.js";
 // Design goals:
 // - Near-zero cost when idle: spans always aggregate into a fixed-size map
 //   (keyed by op name, so memory is bounded); per-span log lines are emitted
-//   only when OPENCODE_MEMORY_PRO_TIMING=1.
+//   only when LOREKEEPER_TIMING=1.
 // - Nesting-friendly: spans measure their own wall time independently; a
 //   nested span's time is naturally included in its parent (by design — the
 //   parent/child split is visible in the summary, e.g. recall.pipeline vs
@@ -18,10 +18,10 @@ import { log } from "./logger.js";
 //
 // Tune/observe:
 //   - memory_stats exposes a `timing` section (getTimingStats()).
-//   - OPENCODE_MEMORY_PRO_TIMING=1 streams one info line per completed span
+//   - LOREKEEPER_TIMING=1 streams one info line per completed span
 //     (visible in the opencode log file / TUI log).
 
-const enabled = /^(1|true|yes)$/i.test(process.env.OPENCODE_MEMORY_PRO_TIMING ?? "");
+const enabled = /^(1|true|yes)$/i.test(process.env.LOREKEEPER_TIMING ?? "");
 
 // name -> { count, totalMs, maxMs, lastMs, lastExtra }
 const stats = new Map();

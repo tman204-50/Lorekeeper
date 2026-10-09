@@ -49,10 +49,10 @@ function writeFileLog(level, message, extra) {
 
 export function initLogger(client) {
     _client = client;
-    if (process.env.OPENCODE_MEMORY_PRO_LOG_FILE) {
+    if (process.env.LOREKEEPER_LOG_FILE) {
         configureLogger({
-            logLevel: process.env.OPENCODE_MEMORY_PRO_LOG_LEVEL,
-            logFile: process.env.OPENCODE_MEMORY_PRO_LOG_FILE,
+            logLevel: process.env.LOREKEEPER_LOG_LEVEL,
+            logFile: process.env.LOREKEEPER_LOG_FILE,
         });
     }
 }

@@ -89,9 +89,9 @@ tmp = tempfile.mkdtemp(prefix="lk-consolidate-")
 proc = subprocess.Popen(["/usr/bin/node", "server/index.js"], cwd=LOREKEEPER,
     env=dict(os.environ, LOREKEEPER_PORT=str(PORT), LOREKEEPER_DB_PATH=os.path.join(tmp, "db"),
              LOREKEEPER_GRAPH_PATH=os.path.join(tmp, "graph.db"), LOREKEEPER_TOKEN=TOKEN,
-             OPENCODE_MEMORY_PRO_CAPTURE_MODE="heuristics",
-             OPENCODE_MEMORY_PRO_OLLAMA_BASE_URL=f"http://127.0.0.1:{OLLAMA_PORT}",
-             OPENCODE_MEMORY_PRO_EMBEDDING_MODEL="mock-embed"),
+             LOREKEEPER_CAPTURE_MODE="heuristics",
+             LOREKEEPER_OLLAMA_BASE_URL=f"http://127.0.0.1:{OLLAMA_PORT}",
+             LOREKEEPER_EMBEDDING_MODEL="mock-embed"),
     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 

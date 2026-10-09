@@ -213,7 +213,7 @@ def boot_service(db_dir, graph_dir):
         LOREKEEPER_DB_PATH=db_dir,
         LOREKEEPER_GRAPH_PATH=graph_dir,
         LOREKEEPER_TOKEN=TOKEN,
-        OPENCODE_MEMORY_PRO_CAPTURE_MODE="heuristics",  # never touch LLM spend
+        LOREKEEPER_CAPTURE_MODE="heuristics",  # never touch LLM spend
     )
     return subprocess.Popen(
         ["/usr/bin/node", "server/index.js"],

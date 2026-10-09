@@ -44,7 +44,7 @@ tmp = tempfile.mkdtemp(prefix="lk-fuzzy-")
 proc = subprocess.Popen(["/usr/bin/node", "server/index.js"], cwd=LOREKEEPER,
     env=dict(os.environ, LOREKEEPER_PORT=str(PORT), LOREKEEPER_DB_PATH=os.path.join(tmp, "db"),
              LOREKEEPER_GRAPH_PATH=os.path.join(tmp, "graph.db"), LOREKEEPER_TOKEN=TOKEN,
-             OPENCODE_MEMORY_PRO_CAPTURE_MODE="heuristics"),
+             LOREKEEPER_CAPTURE_MODE="heuristics"),
     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 try:
     deadline = time.time() + 10

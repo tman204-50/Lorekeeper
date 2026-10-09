@@ -29,9 +29,9 @@ const envIntClamped = (name, fallback, min, max) => {
 // flush for weeks. Clamp 1–10 like its siblings.
 const clampBackoffMultiplier = (value) => Math.max(1, Math.min(10, toNumber(value, 2)));
 let llmRetryPolicy = {
-    maxAttempts: envIntClamped("OPENCODE_MEMORY_PRO_LLM_RETRY_MAX_ATTEMPTS", 3, 1, 10),
-    initialDelayMs: envIntClamped("OPENCODE_MEMORY_PRO_LLM_RETRY_INITIAL_DELAY_MS", 250, 0, 60000),
-    backoffMultiplier: clampBackoffMultiplier(process.env.OPENCODE_MEMORY_PRO_LLM_RETRY_BACKOFF_MULTIPLIER),
+    maxAttempts: envIntClamped("LOREKEEPER_LLM_RETRY_MAX_ATTEMPTS", 3, 1, 10),
+    initialDelayMs: envIntClamped("LOREKEEPER_LLM_RETRY_INITIAL_DELAY_MS", 250, 0, 60000),
+    backoffMultiplier: clampBackoffMultiplier(process.env.LOREKEEPER_LLM_RETRY_BACKOFF_MULTIPLIER),
 };
 // SET_RETRY_POLICY_CLAMP (1.6.2): setLlmRetryPolicy used a raw
 // Object.assign, bypassing every clamp — maxAttempts: Infinity → unbounded
@@ -53,9 +53,9 @@ export function setLlmRetryPolicy(patch) {
 }
 export function resetLlmRetryPolicy() {
     llmRetryPolicy = {
-        maxAttempts: envIntClamped("OPENCODE_MEMORY_PRO_LLM_RETRY_MAX_ATTEMPTS", 3, 1, 10),
-        initialDelayMs: envIntClamped("OPENCODE_MEMORY_PRO_LLM_RETRY_INITIAL_DELAY_MS", 250, 0, 60000),
-        backoffMultiplier: clampBackoffMultiplier(process.env.OPENCODE_MEMORY_PRO_LLM_RETRY_BACKOFF_MULTIPLIER),
+        maxAttempts: envIntClamped("LOREKEEPER_LLM_RETRY_MAX_ATTEMPTS", 3, 1, 10),
+        initialDelayMs: envIntClamped("LOREKEEPER_LLM_RETRY_INITIAL_DELAY_MS", 250, 0, 60000),
+        backoffMultiplier: clampBackoffMultiplier(process.env.LOREKEEPER_LLM_RETRY_BACKOFF_MULTIPLIER),
     };
 }
 export function getLlmRetryPolicy() {

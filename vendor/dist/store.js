@@ -27,14 +27,14 @@ function envInt(name, fallback, min, max) {
 // (store.put -> invalidateScope), so the age bound only bounds cross-process
 // staleness, where a 10-minute window is acceptable. 0 disables the age
 // check entirely (pure version gating, pre-1.4.0 behavior).
-const STALE_AFTER_MS = envInt("OPENCODE_MEMORY_PRO_STALE_AFTER_MS", 10 * 60 * 1000, 0, 24 * 60 * 60 * 1000);
+const STALE_AFTER_MS = envInt("LOREKEEPER_STALE_AFTER_MS", 10 * 60 * 1000, 0, 24 * 60 * 60 * 1000);
 // SCOPE_CACHE_CAP (1.4.3): the per-scope cache used to truncate to a
 // hardcoded 1000 newest records, silently making older memories invisible
 // to search once a scope outgrew it. Now env-overridable; the default stays
 // 1000 to preserve pre-1.4.3 behavior unless the operator opts in, so raising
 // the cap is an explicit, documented decision (memory cost: ~6KB/record for
 // the vector + tokenized + norms, so 50k ≈ 300-500MB/scope in JS).
-const MAX_RECORDS_PER_SCOPE = envInt("OPENCODE_MEMORY_PRO_MAX_RECORDS_PER_SCOPE", 1_000, 100, 5_000_000);
+const MAX_RECORDS_PER_SCOPE = envInt("LOREKEEPER_MAX_RECORDS_PER_SCOPE", 1_000, 100, 5_000_000);
 // SELF_TUNING (Phase 7): defaults for the in-process parameter registry.
 // Initialized lazily in _search if the constructor didn't set them.
 const DEFAULT_TUNABLE_PARAMS = {
@@ -58,15 +58,15 @@ const DEFAULT_CACHE_CONFIG = {
     // change. 0 disables the age check (pure version gating, pre-1.4.0).
     staleAfterMs: STALE_AFTER_MS,
 };
-const NPROBES = envInt("OPENCODE_MEMORY_PRO_NPROBES", 40, 1, 500);
-const ANN_QUERY_BATCH = envInt("OPENCODE_MEMORY_PRO_QUERY_BATCH", 16, 1, 256);
+const NPROBES = envInt("LOREKEEPER_NPROBES", 40, 1, 500);
+const ANN_QUERY_BATCH = envInt("LOREKEEPER_QUERY_BATCH", 16, 1, 256);
 // READ_CAP_FIX (1.4.3): full-scope reads used a hard-coded .limit(100000)
 // with no ORDER BY, so beyond 100k rows a search silently truncated an
 // arbitrary subset of the table. Reads now order by timestamp DESC
 // (deterministic latest-first when the cap binds) and the cap is
 // configurable. 0 disables the cap (LanceDB limit() takes a u64;
 // MAX_SAFE_INTEGER is effectively unbounded).
-const MAX_SCAN_ROWS = envInt("OPENCODE_MEMORY_PRO_MAX_SCAN_ROWS", 5_000_000, 0, 100_000_000);
+const MAX_SCAN_ROWS = envInt("LOREKEEPER_MAX_SCAN_ROWS", 5_000_000, 0, 100_000_000);
 const SCAN_LIMIT = MAX_SCAN_ROWS === 0 ? Number.MAX_SAFE_INTEGER : MAX_SCAN_ROWS;
 const SCAN_ORDER = Object.freeze([Object.freeze({ columnName: "timestamp", ascending: false })]);
 // EPISODE_SCAN_ORDER (1.5.0): the episodic_tasks table uses startTime (not
@@ -198,7 +198,7 @@ export class MemoryStore {
         // only needs the last 30 days, one row per memoryId — 50k is far
         // beyond any real feedback volume. Per-instance (constructor-time)
         // so tests can shrink it.
-        this.feedbackStatsScanLimit = envInt("OPENCODE_MEMORY_PRO_FEEDBACK_STATS_SCAN_LIMIT", 50_000, 1, 5_000_000);
+        this.feedbackStatsScanLimit = envInt("LOREKEEPER_FEEDBACK_STATS_SCAN_LIMIT", 50_000, 1, 5_000_000);
     }
     /**
      * Cross-process compaction lock. Returns true when this process owns the
@@ -3451,7 +3451,7 @@ export class MemoryStore {
     // recent successful non-retried tasks and cross-reference recall events
     // in the effectiveness_events table by sessionID. Memories that were
     // recalled during successful task episodes get an inferred helpful signal.
-    // Env: OPENCODE_MEMORY_PRO_INFERRED_FEEDBACK_ENABLED=true
+    // Env: LOREKEEPER_INFERRED_FEEDBACK_ENABLED=true
     async getInferredFeedbackForScopes(scopes, memoryIds) {
         const inferred = new Map();
         if (scopes.length === 0 || memoryIds.length === 0) return inferred;
@@ -3686,7 +3686,7 @@ export class MemoryStore {
         // outcomes when enabled. The bridging heuristic between task episodes
         // and specific memory IDs requires session→memory tracking not yet
         // built; this hook is the architecture placeholder.
-        const inferredEnabled = String(process.env.OPENCODE_MEMORY_PRO_INFERRED_FEEDBACK_ENABLED ?? "").toLowerCase() === "true";
+        const inferredEnabled = String(process.env.LOREKEEPER_INFERRED_FEEDBACK_ENABLED ?? "").toLowerCase() === "true";
         if (inferredEnabled) {
             const inferred = await this.getInferredFeedbackForScopes(scopes, memoryIds);
             for (const [memoryId, iStats] of inferred) {

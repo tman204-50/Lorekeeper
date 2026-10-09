@@ -7,7 +7,7 @@
 // (uses / depends_on / runs_on / configured_in / connects_to / part_of /
 // managed_by / manages / imports / writes_to / reads_from). Only emitted
 // when BOTH endpoints are real extracted entities — plain words are ignored.
-// Config: graph.typedEdges (default true), env OPENCODE_MEMORY_PRO_GRAPH_TYPED_EDGES.
+// Config: graph.typedEdges (default true), env LOREKEEPER_GRAPH_TYPED_EDGES.
 // GRAPH_STORE_PHASE2B: graph-expansion recall. BFS from the query's
 // extracted entities over the edge table (up to graph.maxHops, preferring
 // typed relations to generic co_occurs), collecting memory ids attached to
@@ -17,7 +17,7 @@
 // 1..maxHops away in the entity graph. Work is bounded (per-entity edge
 // fanout + total visited-entity budget) so a recall never scans the whole
 // graph. Config: graph.expansionEnabled / maxHops / expansionLimit /
-// expansionLambda (env OPENCODE_MEMORY_PRO_GRAPH_EXPANSION_*).
+// expansionLambda (env LOREKEEPER_GRAPH_EXPANSION_*).
 // GRAPH_STORE_POLISH: phased scoring polish (0.9) — boostResults strength
 // smoothed (single-entity match 0.75 instead of 0.5; >=2 entities capped at
 // 1.0) and typed-edge preference in expandRecall raised 1.3x -> 1.5x.

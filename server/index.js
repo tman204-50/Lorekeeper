@@ -10,7 +10,7 @@
 //   LOREKEEPER_DB_PATH    (default ~/.hermes/lorekeeper/lancedb)
 //   LOREKEEPER_GRAPH_PATH (default ~/.hermes/lorekeeper/graph.db)
 //   LOREKEEPER_CONFIG     (optional path to a lorekeeper.json config)
-//   OPENCODE_MEMORY_PRO_* (passthrough knobs the vendor config resolver reads)
+//   LOREKEEPER_* (passthrough knobs the vendor config resolver reads)
 
 import { createServer } from "node:http";
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
@@ -80,9 +80,9 @@ if (!authToken) {
 
 // --- config resolution ------------------------------------------------------
 // Default: Ollama + nomic-embed-text (the fork's default). Override via env
-// (OPENCODE_MEMORY_PRO_*) or a lorekeeper.json config file.
-process.env.OPENCODE_MEMORY_PRO_DB_PATH ??= DB_PATH;
-process.env.OPENCODE_MEMORY_PRO_GRAPH_DB_PATH ??= GRAPH_PATH;
+// (LOREKEEPER_*) or a lorekeeper.json config file.
+process.env.LOREKEEPER_DB_PATH ??= DB_PATH;
+process.env.LOREKEEPER_GRAPH_DB_PATH ??= GRAPH_PATH;
 // Policy knobs (scoping, minCaptureChars, capture mode/LLM, injection, recency,
 // importance) live in lorekeeper_config.json — see LOREKEEPER_CONFIG below.
 // Env vars here were removed 2026-10-07 so the config file is authoritative
@@ -90,7 +90,7 @@ process.env.OPENCODE_MEMORY_PRO_GRAPH_DB_PATH ??= GRAPH_PATH;
 
 const configPath = process.env.LOREKEEPER_CONFIG;
 if (configPath) {
-  process.env.OPENCODE_MEMORY_PRO_CONFIG_PATH = configPath;
+  process.env.LOREKEEPER_CONFIG_PATH = configPath;
 }
 
 // --- state ------------------------------------------------------------------

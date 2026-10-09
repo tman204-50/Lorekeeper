@@ -108,7 +108,7 @@ Auth: loopback + bearer token (in `lorekeeper.json`, like mem0's pattern).
   (`session.create/prompt/delete`) over OpenRouter's OpenAI-compatible API, so
   the fork's `requestLLMCapture`/`requestLLMDigest` run unchanged.
 - Config: `capture.mode=llm`, provider `openrouter`, model `minimax/minimax-m3`
-  (env `OPENCODE_MEMORY_PRO_CAPTURE_LLM_*`).
+  (env `LOREKEEPER_CAPTURE_LLM_*`).
 - `OPENROUTER_API_KEY` auto-loaded from `$HERMES_HOME/.env` by the service.
 - `/capture` tries LLM extraction first; falls back to heuristics on any
   failure (mirrors fork's `_flushAutoCaptureGuarded` + `LLM_EMPTY_VERDICT`).
@@ -192,7 +192,7 @@ commits d37ca71, 33254c4, 786713b, a7b5364 (Phase 6, Oct 5-6 2026):
    store.js queries successful zero-retry task episodes, cross-references
    recall events by sessionId in the effectiveness_events table, and merges
    inferred `{helpful: 1}` signals into the feedback factor. Gated by
-   `OPENCODE_MEMORY_PRO_INFERRED_FEEDBACK_ENABLED` (ON in production).
+   `LOREKEEPER_INFERRED_FEEDBACK_ENABLED` (ON in production).
 
 3. ✅ **Category allowlist + importance gate (D3).** `retentionCandidates()`
    gained `maxImportanceForExpiry` parameter (default-off). When > 0, only

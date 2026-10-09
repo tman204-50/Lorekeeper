@@ -236,7 +236,7 @@ export class OpenAIEmbedder {
     }
     async embed(text) {
         if (!this.config.apiKey) {
-            throw new Error("OpenAI embedding request failed: missing apiKey. Set embedding.apiKey or OPENCODE_MEMORY_PRO_OPENAI_API_KEY.");
+            throw new Error("OpenAI embedding request failed: missing apiKey. Set embedding.apiKey or LOREKEEPER_OPENAI_API_KEY.");
         }
         const baseUrl = (this.config.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
         const endpoint = `${baseUrl}/embeddings`;

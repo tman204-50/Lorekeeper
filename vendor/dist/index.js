@@ -411,7 +411,7 @@ async function createRuntimeState(input) {
     // disagreed — a scope with 1315 records was searchable only to 1000 —
     // hiding up to (maxEntriesPerScope - 1000) memories from recall. Wire the
     // configured cap through unless the operator explicitly set
-    // OPENCODE_MEMORY_PRO_MAX_RECORDS_PER_SCOPE (env keeps precedence).
+    // LOREKEEPER_MAX_RECORDS_PER_SCOPE (env keeps precedence).
     wireStoreCacheCap(store, resolved);
     // GRACEFUL_SHUTDOWN: lance runs auto_cleanup_hook in a background tokio
     // task after each commit; exiting without closing the connection cancels
@@ -1376,13 +1376,13 @@ function unavailableMessage(provider) {
 // SCOPE_CACHE_CAP_WIRE (1.5.9-post): test seam + runtime wiring. Makes the
 // store's searchable-cache cap follow config.maxEntriesPerScope (default
 // 3000) instead of the module-level MAX_RECORDS_PER_SCOPE default (1000),
-// unless the operator explicitly set OPENCODE_MEMORY_PRO_MAX_RECORDS_PER_SCOPE
+// unless the operator explicitly set LOREKEEPER_MAX_RECORDS_PER_SCOPE
 // (env keeps precedence). Defensive so the legacy-loader walk can call it
 // with a plugin input and safely no-op.
 function wireStoreCacheCap(store, resolved) {
     if (!store?.cacheConfig || !resolved?.maxEntriesPerScope)
         return;
-    if (process.env.OPENCODE_MEMORY_PRO_MAX_RECORDS_PER_SCOPE)
+    if (process.env.LOREKEEPER_MAX_RECORDS_PER_SCOPE)
         return;
     store.cacheConfig.maxRecordsPerScope = resolved.maxEntriesPerScope;
 }

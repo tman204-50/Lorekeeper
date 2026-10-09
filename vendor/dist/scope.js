@@ -1,7 +1,7 @@
 import { stableHash } from "./utils.js";
 import { resolveMemoryConfig } from "./config.js";
 // SCOPING_TOGGLE: runtime switch between two scoping modes, driven by the
-// plugin config key `scoping` (env override: OPENCODE_MEMORY_PRO_SCOPING):
+// plugin config key `scoping` (env override: LOREKEEPER_SCOPING):
 //   "global"  (default) — single-user personal assistant: every scope
 //             collapses to "global", so ALL memories are searchable from
 //             any session/directory. (This supersedes the old
@@ -62,26 +62,26 @@ export function setScopingConfigSource(config) {
 // within one turn/session don't repay that cost, while still picking up
 // sidecar edits or `setScopingConfigSource` calls (which clear the cache
 // outright) without a process restart. The cache entry is additionally
-// keyed on the current OPENCODE_MEMORY_PRO_SCOPING env value (a free
+// keyed on the current LOREKEEPER_SCOPING env value (a free
 // read, no I/O) so a runtime env override — the one thing that can change
 // the outcome without going through setScopingConfigSource — is never
 // served stale.
-const SCOPING_CACHE_TTL_MS = Number.isFinite(Number(process.env.OPENCODE_MEMORY_PRO_SCOPING_CACHE_TTL_MS))
-    ? Math.max(0, Number(process.env.OPENCODE_MEMORY_PRO_SCOPING_CACHE_TTL_MS))
+const SCOPING_CACHE_TTL_MS = Number.isFinite(Number(process.env.LOREKEEPER_SCOPING_CACHE_TTL_MS))
+    ? Math.max(0, Number(process.env.LOREKEEPER_SCOPING_CACHE_TTL_MS))
     : 5000;
 // SCOPING_CACHE_LRU (1.6.2): the cache evicted the OLDEST-INSERTED entry
 // (Map insertion order), not the least-recently-USED — a long-lived server
 // hosting many project directories could evict a hot entry while keeping a
 // cold stale one. get() now refreshes recency before every read (delete →
 // set), so eviction drops the least-recently-USED key. Also: a TTL of 0
-// (OPENCODE_MEMORY_PRO_SCOPING_CACHE_TTL_MS=0) silently DISABLED the cache
+// (LOREKEEPER_SCOPING_CACHE_TTL_MS=0) silently DISABLED the cache
 // (every entry expired instantly, `now < expiresAt` always false); 0 now
 // means "never expire" so the cache stays usable.
 const SCOPING_CACHE_MAX_ENTRIES = 20;
 const scopingCache = new Map();
 function resolveScoping(worktree) {
     const key = worktree ?? "";
-    const envScoping = process.env.OPENCODE_MEMORY_PRO_SCOPING;
+    const envScoping = process.env.LOREKEEPER_SCOPING;
     const now = Date.now();
     const rawCached = scopingCache.get(key);
     if (rawCached && rawCached.envScoping === envScoping) {

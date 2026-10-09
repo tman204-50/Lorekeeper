@@ -169,7 +169,7 @@ What this fork adds over upstream 1.6.2 (all regression-tested; see `test/`):
   negative feedback are not penalized (agent-error attribution).
 - Inferred feedback (D1) — successful zero-retry task episodes
   cross-reference recall events by sessionId to auto-boost helpful memories.
-  Gated by `OPENCODE_MEMORY_PRO_INFERRED_FEEDBACK_ENABLED`.
+  Gated by `LOREKEEPER_INFERRED_FEEDBACK_ENABLED`.
 - D3 expire sweep — `retentionCandidates()` respects max importance
   thresholds and a protected-category allowlist.
 - Tripwire: `lorekeeper eval-check` runs the eval against live store, fires
@@ -240,11 +240,11 @@ Env: `LOREKEEPER_PORT`, `LOREKEEPER_TOKEN`, `LOREKEEPER_DB_PATH`,
 
 - `LOREKEEPER_PORT` (default 18777), `LOREKEEPER_TOKEN`, `LOREKEEPER_DB_PATH`,
   `LOREKEEPER_GRAPH_PATH`, `LOREKEEPER_CONFIG`
-- `OPENCODE_MEMORY_PRO_*` passthrough knobs (embedder, retrieval, graph, ...) —
+- `LOREKEEPER_*` passthrough knobs (embedder, retrieval, graph, ...) —
   the vendor config resolver reads these.
 - `OPENROUTER_API_KEY` — loaded from `$HERMES_HOME/.env` automatically; enables
   LLM capture/digests via the shim (`server/llm_shim.js`).
-- `OPENCODE_MEMORY_PRO_CAPTURE_LLM_MODEL` — default `minimax/minimax-m3`.
+- `LOREKEEPER_CAPTURE_LLM_MODEL` — default `minimax/minimax-m3`.
 - `LOREKEEPER_CLIENT_DEBUG=1` — per-request debug lines from the Python client.
 - `LOREKEEPER_HOST` — bind address (default `127.0.0.1`; see deployment notes).
 - `LOREKEEPER_TUNING_PATH` — path to the persisted tuning override file

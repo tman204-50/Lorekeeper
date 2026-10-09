@@ -23,7 +23,7 @@ function computeDegradedFlags(state, embedderHealth, graphStats) {
         }
     }
     if (emb.provider === "openai" && !emb.apiKey) {
-        flags.push("embedding-api-key-missing: embedding.provider=openai but no apiKey (or OPENCODE_MEMORY_PRO_OPENAI_API_KEY) is set — recall will fall back to BM25-only");
+        flags.push("embedding-api-key-missing: embedding.provider=openai but no apiKey (or LOREKEEPER_OPENAI_API_KEY) is set — recall will fall back to BM25-only");
     }
     if (emb.provider !== "openai" && !(emb.baseUrl ?? "")) {
         flags.push("embedding-baseurl-missing: embedding.provider=ollama but no baseUrl (defaults to http://127.0.0.1:11434) — recall will fall back to BM25-only");
@@ -501,7 +501,7 @@ export function createMemoryTools(state) {
                     memoryRetention,
                     // TIMING_SPANS (1.4.7): cumulative span stats (count/total/
                     // avg/max per op) since process start, hottest ops first.
-                    // Set OPENCODE_MEMORY_PRO_TIMING=1 to also stream each span
+                    // Set LOREKEEPER_TIMING=1 to also stream each span
                     // to the log as it completes.
                     timing: getTimingStats(),
                     degradedFlags: computeDegradedFlags(state, embedderHealth, graphStats),
