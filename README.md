@@ -5,7 +5,7 @@
 # Lorekeeper
 
 LanceDB-backed long-term memory for Hermes Agent — a fork of
-[`opencode-memory-pro`](https://github.com/tman204-50/opencode-memory-pro)
+[`lorekeeper`](https://github.com/tman204-50/lorekeeper)
 v1.6.2 (MIT) with substantial custom work on top (client efficiency, recall
 latency, safety, observability — see [Fork enhancements](#fork-enhancements)).
 The battle-tested Node store runs as a localhost HTTP service; a thin Python
@@ -22,7 +22,7 @@ Hermes (Python)                    Lorekeeper service (Node, localhost:18777)
 └──────────────────────┘           └──────────────────────────────────────┘
 ```
 
-- `vendor/dist/` — forked store from opencode-memory-pro 1.6.2 **plus local
+- `vendor/dist/` — forked store from lorekeeper 1.6.2 **plus local
   fork fixes** (trigram fuzzy index, consolidate dryRun, merge text stash,
   digest feedback events, cache work — all marked with tag comments like
   `CONSOLIDATE_DRYRUN (0.2.4)`).
@@ -377,4 +377,4 @@ build stops classifying providers as exclusive.
 
 ## License
 
-MIT — fork of `opencode-memory-pro` (MIT, tman204-50).
+MIT — fork of `lorekeeper` (MIT, tman204-50).

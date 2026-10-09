@@ -1,6 +1,6 @@
 {
   "_comment": "Lorekeeper example configuration. Copy this file to ~/.config/opencode/lorekeeper.json (or ~/.opencode/lorekeeper.json) and edit. Every key is optional and matches the built-in defaults; delete anything you don't need. The plugin works with zero configuration — these options only tune/enhance it.",
-  "provider": "opencode-memory-pro",
+  "provider": "lorekeeper",
   "dbPath": "~/.opencode/memory/lancedb",
   "embedding": {
     "_comment": "Vector search / hybrid recall. Default: local Ollama, no key needed. For OpenAI-compatible endpoints (OpenAI, OpenRouter, etc.), set provider to \"openai\", add baseUrl + model + apiKey. If no embedder is reachable, recall falls back to pure BM25.",

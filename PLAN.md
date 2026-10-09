@@ -1,6 +1,6 @@
 # Lorekeeper — Port Plan (Option A: Service Wrapper)
 
-Self-contained fork of `opencode-memory-pro` v1.6.2. The Node store runs as a
+Self-contained fork of `lorekeeper` v1.6.2. The Node store runs as a
 standalone localhost HTTP service; a thin Hermes Python plugin talks to it.
 
 ## Architecture
@@ -38,7 +38,7 @@ Lorekeeper/
 │   ├── plugin.yaml       # name, version, pip deps
 │   ├── __init__.py       # MemoryProvider impl + tools
 │   └── _client.py        # HTTP client to server
-├── vendor/               # forked dist/ from opencode-memory-pro 1.6.2
+├── vendor/               # forked dist/ from lorekeeper 1.6.2
 │   └── (store.js, embedder.js, graph.js, tools/, ...)
 ├── test/
 ├── README.md
