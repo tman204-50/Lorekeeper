@@ -46,6 +46,9 @@ export function resolveMemoryConfig(config, worktree) {
     const embeddingApiKey = embeddingProvider === "openai"
         ? firstString(process.env.OPENCODE_MEMORY_PRO_OPENAI_API_KEY, embeddingRaw.apiKey)
         : undefined;
+    const embeddingDimensions = embeddingProvider === "openai"
+        ? toNumber(process.env.OPENCODE_MEMORY_PRO_OPENAI_DIMENSIONS ?? embeddingRaw.dimensions, 0)
+        : 0;
     const timeoutEnv = embeddingProvider === "openai"
         ? process.env.OPENCODE_MEMORY_PRO_OPENAI_TIMEOUT_MS ?? process.env.OPENCODE_MEMORY_PRO_EMBEDDING_TIMEOUT_MS
         : process.env.OPENCODE_MEMORY_PRO_EMBEDDING_TIMEOUT_MS;
@@ -71,6 +74,7 @@ export function resolveMemoryConfig(config, worktree) {
             provider: embeddingProvider,
             model: embeddingModel ?? "",
             baseUrl: embeddingBaseUrl,
+            dimensions: embeddingDimensions || undefined,
             apiKey: embeddingApiKey,
             timeoutMs: Math.max(500, Math.floor(toNumber(timeoutRaw, 6000))),
             retry: {

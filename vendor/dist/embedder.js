@@ -253,6 +253,7 @@ export class OpenAIEmbedder {
                     model: this.config.model,
                     input: text,
                     encoding_format: "float",
+                    ...(this.config.dimensions ? { dimensions: this.config.dimensions } : {}),
                 }),
                 signal: controller.signal,
             });

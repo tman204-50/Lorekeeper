@@ -6,15 +6,16 @@
     "mode": "llm",
     "llm": {
       "provider": "openrouter",
-      "model": "qwen/qwen3.7-flash"
+      "model": "google/gemini-2.5-flash-lite"
     }
   },
   "injection": {
-    "mode": "adaptive",
-    "summarization": "auto"
+      "mode": "adaptive",
+      "summarization": "auto",
+      "maxMemories": 5
   },
   "retrieval": {
-    "recencyHalfLifeHours": 168,
-    "importanceWeight": 1.0
+      "recencyHalfLifeHours": 72,
+      "importanceWeight": 1.0
   }
 }
