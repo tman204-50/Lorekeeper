@@ -1,5 +1,5 @@
 {
-  "_comment": "opencode-memory-pro example configuration. Copy this file to ~/.config/opencode/opencode-memory-pro.json (or ~/.opencode/opencode-memory-pro.json) and edit. Every key is optional and matches the built-in defaults; delete anything you don't need. The plugin works with zero configuration — these options only tune/enhance it.",
+  "_comment": "Lorekeeper example configuration. Copy this file to ~/.config/opencode/lorekeeper.json (or ~/.opencode/lorekeeper.json) and edit. Every key is optional and matches the built-in defaults; delete anything you don't need. The plugin works with zero configuration — these options only tune/enhance it.",
   "provider": "opencode-memory-pro",
   "dbPath": "~/.opencode/memory/lancedb",
   "embedding": {

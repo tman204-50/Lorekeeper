@@ -1,5 +1,5 @@
 // LLM_CAPTURE (1.1): SDK-transport LLM extraction and digest generation for
-// opencode-memory-pro.
+// lorekeeper.
 import { log } from "./logger.js";
 import { startSpan } from "./timing.js";
 import { toNumber } from "./utils.js";
@@ -369,7 +369,7 @@ async function runEphemeralAttempt(client, llmConfig, system, userText, title) {
     let sessionId = null;
     try {
         const created = await client.session.create({
-            body: { title: `opencode-memory-pro ${title}` },
+            body: { title: `lorekeeper ${title}` },
         });
         const createdPayload = created && typeof created === "object" && "data" in created ? created.data : created;
         sessionId = createdPayload?.id;

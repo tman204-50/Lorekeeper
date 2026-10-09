@@ -5,7 +5,7 @@ import { log } from "./logger.js";
 const DEFAULT_DB_PATH = "~/.opencode/memory/lancedb";
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
-const SIDECAR_FILE = "opencode-memory-pro.json";
+const SIDECAR_FILE = "lorekeeper.json";
 export function resolveMemoryConfig(config, worktree) {
     const legacyRaw = (config?.memory ?? {});
     const sidecarRaw = loadSidecarConfig(worktree);
@@ -14,7 +14,7 @@ export function resolveMemoryConfig(config, worktree) {
     const retrievalRaw = (raw.retrieval ?? {});
     const modeRaw = firstString(process.env.LOREKEEPER_RETRIEVAL_MODE, retrievalRaw.mode) ?? "hybrid";
     const mode = modeRaw === "vector" ? "vector" : "hybrid";
-    const provider = firstString(process.env.LOREKEEPER_PROVIDER, raw.provider) ?? "opencode-memory-pro";
+    const provider = firstString(process.env.LOREKEEPER_PROVIDER, raw.provider) ?? "lorekeeper";
     const dbPath = expandHomePath(firstString(process.env.LOREKEEPER_DB_PATH, raw.dbPath) ?? DEFAULT_DB_PATH);
     const vectorWeight = clamp(toNumber(process.env.LOREKEEPER_VECTOR_WEIGHT ?? retrievalRaw.vectorWeight, 0.7), 0, 1);
     const bm25Weight = clamp(toNumber(process.env.LOREKEEPER_BM25_WEIGHT ?? retrievalRaw.bm25Weight, 0.3), 0, 1);
@@ -134,7 +134,7 @@ function resolveEmbeddingProvider(raw) {
         return "ollama";
     if (raw === "openai")
         return "openai";
-    throw new Error(`[opencode-memory-pro] Invalid embedding provider "${raw}". Expected "ollama" or "openai".`);
+    throw new Error(`[lorekeeper] Invalid embedding provider "${raw}". Expected "ollama" or "openai".`);
 }
 function resolveInjectionMode(raw) {
     if (raw === "fixed" || raw === "budget" || raw === "adaptive")
@@ -338,10 +338,10 @@ function validateEmbeddingConfig(embedding) {
     if (embedding.provider !== "openai")
         return;
     if (!embedding.apiKey) {
-        throw new Error("[opencode-memory-pro] OpenAI embedding provider requires apiKey. Set embedding.apiKey or LOREKEEPER_OPENAI_API_KEY.");
+        throw new Error("[lorekeeper] OpenAI embedding provider requires apiKey. Set embedding.apiKey or LOREKEEPER_OPENAI_API_KEY.");
     }
     if (!embedding.model) {
-        throw new Error("[opencode-memory-pro] OpenAI embedding provider requires model. Set embedding.model or LOREKEEPER_OPENAI_MODEL.");
+        throw new Error("[lorekeeper] OpenAI embedding provider requires model. Set embedding.model or LOREKEEPER_OPENAI_MODEL.");
     }
 }
 function loadSidecarConfig(worktree) {

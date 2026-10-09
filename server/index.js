@@ -1,5 +1,5 @@
 // Lorekeeper memory service — standalone HTTP wrapper around the forked
-// opencode-memory-pro store. Loopback only, bearer-token auth.
+// lorekeeper store. Loopback only, bearer-token auth.
 //
 // The service owns the MemoryStore + graph + embedder. It exposes a small
 // JSON-RPC-ish HTTP API that the Hermes Python provider calls.

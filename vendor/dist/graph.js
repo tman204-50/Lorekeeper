@@ -1,4 +1,4 @@
-// GRAPH_STORE_PHASE1: offline entity graph for opencode-memory-pro.
+// GRAPH_STORE_PHASE1: offline entity graph for lorekeeper.
 // Pure-heuristic entity extraction (no LLM), sqlite-backed co-occurrence
 // edges, and a multiplicative graphBoost factor applied to recall scores.
 // Storage is global-only by design (single-user scope patch).

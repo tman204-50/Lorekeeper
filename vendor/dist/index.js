@@ -1417,7 +1417,7 @@ function handleEmbeddingConfigChange(state, nextConfig) {
 // values and calls every function export as a plugin; any `export function`
 // declared before the default export aborts loading — see 1.5.3 regression.)
 export default {
-    id: "opencode-memory-pro",
+    id: "lorekeeper",
     server: plugin,
 };
 // Named exports for regression tests only — opencode plugin loading consumes

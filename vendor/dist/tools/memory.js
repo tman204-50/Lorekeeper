@@ -141,7 +141,7 @@ export async function repairEmbeddingDimension(state, actualDim) {
     await fs.promises.mkdir(backupDir, { recursive: true }).catch(() => { });
     const backupPath = `${backupDir}/reembed-repair-${Date.now()}.json`;
     await fs.promises.writeFile(backupPath, JSON.stringify({
-        format: "opencode-memory-pro/backup",
+        format: "lorekeeper/backup",
         version: 1,
         exportedAt: new Date().toISOString(),
         provider: state.config.provider,
@@ -1280,7 +1280,7 @@ ${explanations.join("\n")}`;
                     }, null, 2);
                 }
                 const payload = {
-                    format: "opencode-memory-pro/backup",
+                    format: "lorekeeper/backup",
                     version: 1,
                     exportedAt: new Date().toISOString(),
                     provider: state.config.provider,

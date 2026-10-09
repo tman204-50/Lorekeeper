@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
 
-const SERVICE_NAME = "opencode-memory-pro";
+const SERVICE_NAME = "lorekeeper";
 const LOG_LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
 
 let _client = null;
