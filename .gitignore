@@ -5,3 +5,5 @@ test/tmp/
 __pycache__/
 *.so
 lk-test-export.json
+
+*.bak-*
