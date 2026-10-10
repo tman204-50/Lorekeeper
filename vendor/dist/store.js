@@ -638,7 +638,12 @@ export class MemoryStore {
             this._loadTrialState().catch((e) => log("warn", `[store] trial-state load: ${e.message}`));
         }
     }
+    _trialLoaded = false;
     async _saveTrialState() {
+        // Wait until the persisted file has been read — otherwise the first
+        // post-boot search can overwrite trial-state.json with a near-zero
+        // snapshot before the loader finishes, resetting the counter.
+        if (!this._trialLoaded) return;
         const path = this._trialPath;
         if (!path) return;
         const snapshot = {
@@ -657,6 +662,9 @@ export class MemoryStore {
     async _loadTrialState() {
         const path = this._trialPath;
         if (!path) return;
+        // trialState may not exist yet depending on init ordering — never let
+        // the restore crash, or the file gets clobbered by post-boot saves.
+        if (!this.trialState) this.trialState = { searchCalls: 0, trialInterval: 500, lastTrialSearchCount: 0, baseline: null, bestParams: null, isRunning: false, consecutiveFailures: 0 };
         try {
             const raw = await readFile(path, "utf-8");
             const data = JSON.parse(raw);
@@ -668,6 +676,10 @@ export class MemoryStore {
             log("info", `[trial-state] restored searchCalls=${this.trialState.searchCalls} from ${path}`);
         } catch (e) {
             if (!e.message?.includes?.("ENOENT")) log("warn", `[trial-state] load skipped: ${e.message}`);
+        } finally {
+            // Saves were blocked until the file was read, so the loader always
+            // sees the pre-restart snapshot — no reset possible.
+            this._trialLoaded = true;
         }
     }
     async _saveTuning() {
